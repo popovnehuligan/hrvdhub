@@ -19,7 +19,7 @@ export function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length']);
     if (declared > limit) {
-      reject(new HttpError(413, 'That file is too big'));
+      reject(new HttpError(413, 'Файл слишком большой'));
       req.resume();
       return;
     }
@@ -28,7 +28,7 @@ export function readBody(req, limit) {
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > limit) {
-        reject(new HttpError(413, 'That file is too big'));
+        reject(new HttpError(413, 'Файл слишком большой'));
         req.destroy();
         return;
       }
@@ -47,6 +47,6 @@ export async function readJson(req, limit = 64 * 1024) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('not an object');
     return data;
   } catch {
-    throw new HttpError(400, 'Invalid JSON');
+    throw new HttpError(400, 'Неверный запрос');
   }
 }

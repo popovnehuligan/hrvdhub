@@ -10,6 +10,7 @@ import {
   groupPlan,
   itemTotal,
   monthsBetween,
+  plural,
   sumTotals,
   todayIn,
 } from '../public/lib/shared.js';
@@ -45,7 +46,7 @@ export function createBot({ config, telegram, store, access }) {
     return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : `${base}?startapp`;
   }
 
-  function openButton(startParam, text = 'Open wishlist') {
+  function openButton(startParam, text = 'Открыть вишлист') {
     const url = appLink(startParam);
     return url ? { inline_keyboard: [[{ text, url }]] } : undefined;
   }
@@ -60,7 +61,7 @@ export function createBot({ config, telegram, store, access }) {
   function planText(item) {
     const plan = describePlan(item, today());
     if (!plan) return '';
-    if (plan.tone === 'nodate') return 'date not set yet';
+    if (plan.tone === 'nodate') return 'дата пока не выбрана';
     return `${plan.label.toLowerCase()} (${plan.detail})`;
   }
 
@@ -68,9 +69,9 @@ export function createBot({ config, telegram, store, access }) {
     const category = findOption(CATEGORIES, item.category);
     const priority = findOption(PRIORITIES, item.priority);
     return [
-      `${category.emoji} ${category.label} · ${priority.emoji} ${priority.label}`,
-      priceText(item) && `💶 ${priceText(item)}`,
-      item.note && `📝 ${escape(shorten(item.note, 300))}`,
+      `${category.label} · ${priority.label}`,
+      priceText(item) && `Цена: ${priceText(item)}`,
+      item.note && escape(shorten(item.note, 300)),
     ].filter(Boolean);
   }
 
@@ -100,19 +101,19 @@ export function createBot({ config, telegram, store, access }) {
 
   const notify = {
     added(item) {
-      const lines = [`🆕 <b>${escape(item.createdBy.name)}</b> added a wish:`, `<b>${escape(item.title)}</b>`, ...itemLines(item)];
-      if (item.planned) lines.push(`🗓 Planned: ${planText(item)}`);
+      const lines = [`<b>${escape(item.createdBy.name)}</b> добавил(а) желание:`, `<b>${escape(item.title)}</b>`, ...itemLines(item)];
+      if (item.planned) lines.push(`В плане: ${planText(item)}`);
       return post(item, lines.join('\n'));
     },
     planned(item) {
-      const lines = [`🗓 <b>Planning to buy</b>: ${escape(item.title)}`, `When: <b>${planText(item)}</b>`];
-      if (priceText(item)) lines.push(`💶 ${priceText(item)}`);
+      const lines = [`<b>Планируем купить</b>: ${escape(item.title)}`, `Когда: <b>${planText(item)}</b>`];
+      if (priceText(item)) lines.push(`Цена: ${priceText(item)}`);
       return post(item, lines.join('\n'));
     },
     bought(item) {
       const paid = item.boughtPrice ?? itemTotal(item);
-      const lines = [`✅ <b>Bought</b>: ${escape(item.title)}`];
-      if (paid != null) lines.push(`💶 ${formatMoney(paid, item.currency)}`);
+      const lines = [`<b>Куплено</b>: ${escape(item.title)}`];
+      if (paid != null) lines.push(`Оплачено: ${formatMoney(paid, item.currency)}`);
       return post(item, lines.join('\n'));
     },
   };
@@ -121,8 +122,8 @@ export function createBot({ config, telegram, store, access }) {
     const now = today();
     const groups = groupPlan(store.items, now);
     const wishes = store.items.filter((item) => item.status === 'wanted' && !item.planned).length;
-    if (!groups.length) return `🗓 Nothing is planned yet.\n${wishes} wishes are waiting on the wishlist.`;
-    const lines = ['🗓 <b>Purchase plan</b>'];
+    if (!groups.length) return `Пока ничего не запланировано.\nВ вишлисте ${wishes} ${plural(wishes, 'желание', 'желания', 'желаний')}.`;
+    const lines = ['<b>План покупок</b>'];
     for (const group of groups) {
       const total = group.total ? ` — ${formatMoney(group.total, config.currency)}` : '';
       lines.push('', `<b>${escape(group.title)}</b>${group.note ? ` (${group.note.toLowerCase()})` : ''}${total}`);
@@ -134,8 +135,8 @@ export function createBot({ config, telegram, store, access }) {
       }
     }
     const { total } = sumTotals(groups.flatMap((group) => group.items));
-    lines.push('', `Total planned: <b>${formatMoney(total, config.currency)}</b>`);
-    if (wishes) lines.push(`Plus ${wishes} more on the wishlist.`);
+    lines.push('', `Всего в плане: <b>${formatMoney(total, config.currency)}</b>`);
+    if (wishes) lines.push(`И ещё ${wishes} ${plural(wishes, 'желание', 'желания', 'желаний')} в вишлисте.`);
     return shorten(lines.join('\n'), 4000);
   }
 
@@ -147,17 +148,17 @@ export function createBot({ config, telegram, store, access }) {
     if (hour < config.reminderHour || store.meta.lastReminderDay === now) return;
     const due = store.items.filter((item) => isDue(item, now) && item.remindedFor !== item.plannedDate);
     if (due.length && config.notifyChatId) {
-      const lines = ['⏰ <b>Coming up to buy</b>'];
+      const lines = ['<b>Скоро покупаем</b>'];
       for (const item of due) {
         lines.push(`• <b>${escape(item.title)}</b> — ${planText(item)}${priceText(item) ? ` · ${priceText(item)}` : ''}`);
       }
       const { total } = sumTotals(due);
-      if (total) lines.push('', `Total: <b>${formatMoney(total, config.currency)}</b>`);
+      if (total) lines.push('', `Итого: <b>${formatMoney(total, config.currency)}</b>`);
       await telegram.call('sendMessage', {
         chat_id: config.notifyChatId,
         text: shorten(lines.join('\n'), 4000),
         parse_mode: 'HTML',
-        reply_markup: openButton('plan', 'Open the plan'),
+        reply_markup: openButton('plan', 'Открыть план'),
       });
       for (const item of due) item.remindedFor = item.plannedDate;
     }
@@ -187,27 +188,27 @@ export function createBot({ config, telegram, store, access }) {
       case 'help': {
         const canUseWebApp = chat.type === 'private' && config.publicUrl.startsWith('https://');
         const markup = canUseWebApp
-          ? { inline_keyboard: [[{ text: '🛒 Open wishlist', web_app: { url: config.publicUrl } }]] }
+          ? { inline_keyboard: [[{ text: 'Открыть вишлист', web_app: { url: config.publicUrl } }]] }
           : openButton();
         return reply(
           [
-            '<b>HOROVOD wishlist</b> 🎸',
-            'Everything we want to get for the Horovod Hub: instruments, tech, and anything else we need to buy.',
+            '<b>Вишлист HOROVOD</b>',
+            'Всё, что нужно купить для Хаба: инструменты, техника и всё остальное.',
             '',
-            'Add a wish with a photo or a shop link, vote for the ones you want most, and see what we are planning to buy and when.',
+            'Добавляйте желания с фото или ссылкой на магазин, голосуйте за самое нужное и смотрите, что и когда мы планируем купить.',
             '',
-            '/plan — what we are planning to buy',
-            '/chatid — this chat’s ID (for setup)',
+            '/plan — план покупок',
+            '/chatid — ID этого чата (для настройки)',
           ].join('\n'),
           markup,
         );
       }
       case 'plan':
-        if (!(await mayReadPlan(message))) return reply('Sorry, the wishlist is only for HOROVOD members.');
-        return reply(planSummary(), openButton('plan', 'Open the plan'));
+        if (!(await mayReadPlan(message))) return reply('Извините, вишлист только для участников HOROVOD.');
+        return reply(planSummary(), openButton('plan', 'Открыть план'));
       case 'chatid':
         return reply(
-          `This chat’s ID: <code>${chat.id}</code>${message.from ? `\nYour user ID: <code>${message.from.id}</code>` : ''}`,
+          `ID этого чата: <code>${chat.id}</code>${message.from ? `\nВаш ID: <code>${message.from.id}</code>` : ''}`,
         );
       default:
         return undefined;
@@ -217,14 +218,14 @@ export function createBot({ config, telegram, store, access }) {
   async function setup() {
     await telegram.call('setMyCommands', {
       commands: [
-        { command: 'wishlist', description: 'Open the wishlist' },
-        { command: 'plan', description: 'What we are planning to buy' },
-        { command: 'chatid', description: 'Show this chat’s ID (for setup)' },
+        { command: 'wishlist', description: 'Открыть вишлист' },
+        { command: 'plan', description: 'План покупок' },
+        { command: 'chatid', description: 'ID чата (для настройки)' },
       ],
     });
     if (config.publicUrl.startsWith('https://')) {
       await telegram.call('setChatMenuButton', {
-        menu_button: { type: 'web_app', text: 'Wishlist', web_app: { url: config.publicUrl } },
+        menu_button: { type: 'web_app', text: 'Вишлист', web_app: { url: config.publicUrl } },
       });
     } else {
       console.warn('PUBLIC_URL is not an https:// address, so the bot has no "Wishlist" menu button yet.');

@@ -44,7 +44,7 @@ test('requires valid Telegram data and group membership', async () => {
 test('a wish needs a photo or a link', async () => {
   const response = await ctx.as(member)('POST', '/api/items', { title: 'Cables' });
   assert.equal(response.status, 400);
-  assert.match(response.body.error, /photo or a link/);
+  assert.match(response.body.error, /фото или ссылку/);
 });
 
 test('uploading a photo and adding a wish with it', async () => {
@@ -77,7 +77,7 @@ test('uploading a photo and adding a wish with it', async () => {
   const post = ctx.telegram.sent('sendPhoto').at(-1);
   assert.ok(post, 'posted to the group with the photo');
   assert.equal(post.params.chat_id, '-100500');
-  assert.match(post.params.caption, /Anna<\/b> added a wish/);
+  assert.match(post.params.caption, /Anna<\/b> добавил\(а\) желание/);
   assert.match(post.params.caption, /Acoustic panels/);
 });
 
@@ -118,8 +118,8 @@ test('only admins plan and buy; the group hears about it', async () => {
   assert.equal(plan.body.item.plannedDate, '2026-11-01', 'month plans are stored as the 1st');
   await settle();
   const planned = ctx.telegram.sent('sendMessage').at(-1);
-  assert.match(planned.params.text, /Planning to buy<\/b>: Snare drum/);
-  assert.match(planned.params.text, /November 2026/);
+  assert.match(planned.params.text, /Планируем купить<\/b>: Snare drum/);
+  assert.match(planned.params.text, /Ноябрь 2026/);
   assert.equal(planned.params.reply_markup.inline_keyboard[0][0].url, `https://t.me/horovod_test_bot?startapp=item_${id}`);
 
   const bought = await ctx.as(admin)('PATCH', `/api/items/${id}`, {
@@ -130,7 +130,7 @@ test('only admins plan and buy; the group hears about it', async () => {
   assert.equal(bought.body.item.status, 'bought');
   assert.equal(bought.body.item.boughtPrice, 149.9);
   await settle();
-  assert.match(ctx.telegram.sent('sendMessage').at(-1).params.text, /Bought<\/b>: Snare drum\n💶 €149.90/);
+  assert.match(ctx.telegram.sent('sendMessage').at(-1).params.text, /Куплено<\/b>: Snare drum\nОплачено: 149,90\s€/);
 
   const unplan = await ctx.as(admin)('PATCH', `/api/items/${id}`, { status: 'wanted' });
   assert.equal(unplan.body.item.boughtAt, null);
@@ -174,13 +174,13 @@ test('voting toggles and shows who voted', async () => {
 
 test('validates input', async () => {
   const cases = [
-    [{ title: '', link: 'https://shop.example/a' }, /Title is required/],
-    [{ title: 'x', link: 'javascript:alert(1)' }, /web links/],
-    [{ title: 'x', link: 'https://shop.example/a', category: 'boats' }, /Unknown category/],
-    [{ title: 'x', link: 'https://shop.example/a', price: 'lots' }, /Price/],
-    [{ title: 'x', link: 'https://shop.example/a', quantity: 0 }, /Quantity/],
-    [{ title: 'x', image: '../../etc/passwd' }, /Unknown image/],
-    [{ title: 'x', image: `${'a'.repeat(32)}.png` }, /no longer here/],
+    [{ title: '', link: 'https://shop.example/a' }, /Название: обязательное поле/],
+    [{ title: 'x', link: 'javascript:alert(1)' }, /веб-ссылки/],
+    [{ title: 'x', link: 'https://shop.example/a', category: 'boats' }, /категория/],
+    [{ title: 'x', link: 'https://shop.example/a', price: 'lots' }, /Цена/],
+    [{ title: 'x', link: 'https://shop.example/a', quantity: 0 }, /Количество/],
+    [{ title: 'x', image: '../../etc/passwd' }, /Неизвестная картинка/],
+    [{ title: 'x', image: `${'a'.repeat(32)}.png` }, /потерялось/],
   ];
   for (const [body, error] of cases) {
     const response = await ctx.as(admin)('POST', '/api/items', body);

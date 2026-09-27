@@ -184,7 +184,7 @@ export async function fetchLinkPreview(link, { uploadsDir, allowPrivate = false 
       });
       const contentType = String(response.headers['content-type'] || '');
       if (response.status >= 400) {
-        lastError = new Error(`The shop answered with an error (${response.status})`);
+        lastError = new Error(`Магазин ответил ошибкой (${response.status})`);
         continue;
       }
       if (contentType.startsWith('image/')) {
@@ -199,7 +199,7 @@ export async function fetchLinkPreview(link, { uploadsDir, allowPrivate = false 
       lastError = error;
     }
   }
-  if (!page) throw lastError || new Error('Could not open the link');
+  if (!page) throw lastError || new Error('Не удалось открыть ссылку');
 
   let image = null;
   for (const candidate of page.images.slice(0, 4)) {

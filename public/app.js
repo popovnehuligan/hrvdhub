@@ -15,6 +15,7 @@ import {
   isValidDate,
   itemTotal,
   localToday,
+  plural,
   sumTotals,
 } from './lib/shared.js';
 
@@ -85,11 +86,11 @@ async function api(path, { method = 'GET', body, raw, contentType } = {}) {
   try {
     response = await fetch(path, { method, headers, body: payload });
   } catch {
-    throw new Error('No connection. Check your internet and try again.');
+    throw new Error('Нет соединения. Проверьте интернет и попробуйте ещё раз.');
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.error || `Something went wrong (${response.status})`);
+    const error = new Error(data.error || `Что-то пошло не так (${response.status})`);
     error.status = response.status;
     throw error;
   }
@@ -148,12 +149,12 @@ function openSheet({ title = '', render, live = false, tall = false }) {
   const body = h('div', { class: 'sheet-body' });
   const panel = h(
     'div',
-    { class: `sheet${tall ? ' tall' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title || 'Details' },
+    { class: `sheet${tall ? ' tall' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title || 'Подробнее' },
     h(
       'header',
       { class: 'sheet-head' },
       h('h2', {}, title),
-      h('button', { class: 'icon-button', type: 'button', 'aria-label': 'Close', onclick: () => sheet.close() }, '✕'),
+      h('button', { class: 'icon-button', type: 'button', 'aria-label': 'Закрыть', onclick: () => sheet.close() }, '✕'),
     ),
     body,
   );
@@ -254,7 +255,7 @@ function thumb(item, { hero = false } = {}) {
   }
   return h(
     'div',
-    { class: `${base} placeholder cat-${item.category}` },
+    { class: `${base} placeholder` },
     h('span', { class: 'eye placeholder-eye', 'aria-hidden': 'true' }),
     item.link ? h('span', { class: 'placeholder-host' }, hostOf(item.link)) : null,
   );
@@ -266,18 +267,19 @@ function metaLine(item) {
   return h(
     'div',
     { class: 'meta' },
-    h('span', { class: `tag cat-${category.id}` }, category.label),
-    h('span', { class: `prio prio-${priority.id}` }, priority.label),
+    category.label,
+    h('span', { class: 'sep' }, '·'),
+    h('span', { class: priority.id === 'must' ? 'must' : '' }, priority.label),
   );
 }
 
 function priceLine(item) {
   if (item.status === 'bought') {
     const paid = item.boughtPrice ?? itemTotal(item);
-    return h('div', { class: 'price' }, paid != null ? `Paid ${money(paid)}` : 'Bought');
+    return h('div', { class: 'price' }, paid != null ? `Оплачено ${money(paid)}` : 'Куплено');
   }
   const total = itemTotal(item);
-  if (total == null) return h('div', { class: 'price missing' }, 'No price yet');
+  if (total == null) return h('div', { class: 'price missing' }, 'Цена не указана');
   return h(
     'div',
     { class: 'price' },
@@ -287,7 +289,7 @@ function priceLine(item) {
 }
 
 function planText(plan) {
-  return plan.tone === 'nodate' ? ' · date not set' : ` · ${plan.detail}`;
+  return plan.tone === 'nodate' ? ' · дата не выбрана' : ` · ${plan.detail}`;
 }
 
 /** The "Planned" toggle on a card. Admins tap it to plan / change the date. */
@@ -297,16 +299,12 @@ function planChip(item) {
     if (!isAdmin()) return null;
     return h(
       'button',
-      { type: 'button', class: 'plan-chip off', onclick: stop(() => openWhenSheet(item)), 'aria-label': 'Plan to buy' },
+      { type: 'button', class: 'plan-chip off', onclick: stop(() => openWhenSheet(item)), 'aria-label': 'Запланировать покупку' },
       h('span', { class: 'mini-switch' }),
-      'Planned',
+      'Запланировать',
     );
   }
-  const content = [
-    isAdmin() ? h('span', { class: 'mini-switch on' }) : h('span', { 'aria-hidden': 'true' }, '🗓'),
-    h('b', {}, plan.label),
-    h('span', { class: 'plan-detail' }, planText(plan)),
-  ];
+  const content = [h('b', {}, plan.label), h('span', { class: 'plan-detail' }, ` · ${plan.short}`)];
   if (!isAdmin()) return h('span', { class: `plan-chip tone-${plan.tone}` }, content);
   return h(
     'button',
@@ -314,7 +312,7 @@ function planChip(item) {
       type: 'button',
       class: `plan-chip tone-${plan.tone}`,
       onclick: stop(() => openWhenSheet(item)),
-      'aria-label': `Planned: ${plan.label}${planText(plan)}. Change`,
+      'aria-label': `В плане: ${plan.label}${planText(plan)}. Изменить`,
     },
     content,
   );
@@ -327,11 +325,10 @@ function voteButton(item, { withLabel = false } = {}) {
       type: 'button',
       class: `vote${item.voted ? ' voted' : ''}`,
       'aria-pressed': String(item.voted),
-      'aria-label': item.voted ? 'Remove your vote' : 'Vote for this',
+      'aria-label': item.voted ? 'Убрать голос' : 'Проголосовать',
       onclick: stop(() => toggleVote(item)),
     },
-    h('span', { class: 'vote-plus' }, '+1'),
-    withLabel ? h('span', {}, item.voted ? 'Voted' : 'Vote') : null,
+    withLabel ? h('span', {}, item.voted ? 'Вы за' : 'Голосовать') : h('span', { class: 'vote-plus' }, '+1'),
     item.votes ? h('span', { class: 'vote-count' }, item.votes) : null,
   );
 }
@@ -361,8 +358,8 @@ function card(item) {
 }
 
 function statusText(item) {
-  if (item.status === 'bought') return item.boughtAt ? `✅ Bought ${formatDay(item.boughtAt, today())}` : '✅ Bought';
-  if (item.status === 'dropped') return '🗄 Dropped';
+  if (item.status === 'bought') return item.boughtAt ? `Куплено ${formatDay(item.boughtAt, today())}` : 'Куплено';
+  if (item.status === 'dropped') return 'Отменено';
   return '';
 }
 
@@ -392,7 +389,7 @@ function groupHead(title, { note, tone, total, missing, prefix = '' }) {
       'div',
       { class: 'group-total' },
       total ? `${prefix}${money(total)}` : '',
-      missing ? h('small', {}, `${total ? ' + ' : ''}${missing} without price`) : null,
+      missing ? h('small', {}, `${total ? ' + ' : ''}${missing} без цены`) : null,
     ),
   );
 }
@@ -405,8 +402,6 @@ function header() {
   const wanted = state.items.filter((item) => item.status === 'wanted');
   const planned = wanted.filter((item) => item.planned);
   const { total } = sumTotals(planned);
-  const stat = (value, label, tone) =>
-    h('div', { class: 'stat' }, h('div', { class: `stat-value ${tone}` }, value), h('div', { class: 'stat-label' }, label));
   return h(
     'header',
     { class: 'top' },
@@ -414,15 +409,14 @@ function header() {
       'div',
       { class: 'top-brand' },
       h('span', { class: 'eye', 'aria-hidden': 'true' }),
-      h('span', { class: 'kicker' }, 'HOROVOD · Hub'),
+      h('span', { class: 'kicker' }, 'HOROVOD · Хаб'),
     ),
-    h('h1', {}, 'Wishlist'),
+    h('h1', {}, 'Вишлист'),
     h(
-      'div',
-      { class: 'stats' },
-      stat(wanted.length, wanted.length === 1 ? 'wish' : 'wishes', 'yellow'),
-      stat(planned.length, 'planned', 'pink'),
-      stat(money(total) || money(0), 'to spend', 'green'),
+      'p',
+      { class: 'top-sub' },
+      `${wanted.length} ${plural(wanted.length, 'желание', 'желания', 'желаний')} · ${planned.length} в плане`,
+      total ? ` · ${money(total)}` : '',
     ),
   );
 }
@@ -434,9 +428,9 @@ function tabs() {
     bought: state.items.filter((item) => item.status === 'bought').length,
   };
   const list = [
-    { id: 'wishlist', label: 'Wishlist' },
-    { id: 'plan', label: 'Plan' },
-    { id: 'bought', label: 'Bought' },
+    { id: 'wishlist', label: 'Желания' },
+    { id: 'plan', label: 'План' },
+    { id: 'bought', label: 'Куплено' },
   ];
   return h(
     'nav',
@@ -473,8 +467,8 @@ function toolbar() {
       h('input', {
         type: 'search',
         class: 'search',
-        placeholder: 'Search wishes',
-        'aria-label': 'Search wishes',
+        placeholder: 'Поиск',
+        'aria-label': 'Поиск',
         value: state.query,
         oninput: (event) => {
           state.query = event.target.value;
@@ -485,7 +479,7 @@ function toolbar() {
         'select',
         {
           class: 'sort',
-          'aria-label': 'Sort by',
+          'aria-label': 'Сортировка',
           onchange: (event) => {
             state.sort = event.target.value;
             render();
@@ -497,12 +491,12 @@ function toolbar() {
     h(
       'div',
       { class: 'chips scroll' },
-      [{ id: 'all', emoji: '', label: 'All' }, ...CATEGORIES].map((category) =>
+      [{ id: 'all', emoji: '', label: 'Все' }, ...CATEGORIES].map((category) =>
         h(
           'button',
           {
             type: 'button',
-            class: `chip cat-${category.id}${state.category === category.id ? ' selected' : ''}`,
+            class: `chip${state.category === category.id ? ' selected' : ''}`,
             'aria-pressed': String(state.category === category.id),
             onclick: () => {
               state.category = category.id;
@@ -522,9 +516,9 @@ function wishlistContent() {
   if (!wanted.length) {
     return emptyState(
       '🎸',
-      'No wishes yet',
-      'Add the first thing Horovod needs. A photo or a shop link is enough.',
-      h('button', { type: 'button', class: 'button primary', onclick: () => openForm() }, '＋ Add a wish'),
+      'Пока пусто',
+      'Добавьте первое, что нужно HOROVOD. Достаточно фото или ссылки на магазин.',
+      h('button', { type: 'button', class: 'button primary', onclick: () => openForm() }, '+ Добавить'),
     );
   }
   const query = state.query.trim().toLowerCase();
@@ -532,7 +526,7 @@ function wishlistContent() {
     .filter((item) => state.category === 'all' || item.category === state.category)
     .filter((item) => !query || `${item.title} ${item.note} ${hostOf(item.link)}`.toLowerCase().includes(query))
     .sort(compareItems(state.sort));
-  if (!list.length) return emptyState('🔍', 'Nothing matches', 'Try another search or category.');
+  if (!list.length) return emptyState('🔍', 'Ничего не найдено', 'Попробуйте другой запрос или категорию.');
   return h('div', { class: 'cards' }, list.map(card));
 }
 
@@ -541,10 +535,10 @@ function planContent() {
   if (!groups.length) {
     return emptyState(
       '🗓',
-      'Nothing planned yet',
+      'Пока ничего не запланировано',
       isAdmin()
-        ? 'Tap “Planned” on a wish and pick when we’re buying it. It will show up here, month by month.'
-        : 'When we decide to buy something, it shows up here with its date.',
+        ? 'Нажмите «Запланировать» на желании и выберите, когда покупаем. Здесь появится план по месяцам.'
+        : 'Когда мы решим что-то купить, это появится здесь с датой.',
     );
   }
   const planned = groups.flatMap((group) => group.items);
@@ -555,13 +549,13 @@ function planContent() {
     h(
       'div',
       { class: 'summary' },
-      h('div', {}, h('div', { class: 'summary-label' }, 'Planned spending'), h('div', { class: 'summary-value' }, money(total))),
+      h('div', {}, h('div', { class: 'summary-label' }, 'Запланировано'), h('div', { class: 'summary-value' }, money(total))),
       h(
         'div',
         { class: 'summary-side' },
-        h('div', {}, `${planned.length} ${planned.length === 1 ? 'item' : 'items'}`),
-        soon.total ? h('div', {}, `${money(soon.total)} this month`) : null,
-        missing ? h('div', {}, `${missing} without price`) : null,
+        h('div', {}, `${planned.length} ${plural(planned.length, 'позиция', 'позиции', 'позиций')}`),
+        soon.total ? h('div', {}, `${money(soon.total)} в этом месяце`) : null,
+        missing ? h('div', {}, `${missing} без цены`) : null,
       ),
     ),
     groups.map((group) =>
@@ -570,7 +564,7 @@ function planContent() {
         { class: 'group' },
         groupHead(group.title, {
           note: group.note,
-          tone: group.key === 'overdue' ? 'overdue' : group.note === 'This month' ? 'soon' : null,
+          tone: group.key === 'overdue' ? 'overdue' : group.note === 'В этом месяце' ? 'soon' : null,
           total: group.total,
           missing: group.missing,
         }),
@@ -590,7 +584,7 @@ function boughtContent() {
   );
   const content = [];
   if (!groups.length) {
-    content.push(emptyState('🛍', 'Nothing bought yet', 'Things we buy end up here, so we can see what we spent.'));
+    content.push(emptyState('🛍', 'Пока ничего не куплено', 'Здесь будут покупки и сколько мы потратили.'));
   } else {
     content.push(
       h(
@@ -599,7 +593,7 @@ function boughtContent() {
         h(
           'div',
           {},
-          h('div', { class: 'summary-label' }, `Spent in ${year}`),
+          h('div', { class: 'summary-label' }, `Потрачено в ${year}`),
           h('div', { class: 'summary-value' }, money(spentThisYear.total)),
         ),
       ),
@@ -607,7 +601,7 @@ function boughtContent() {
         h(
           'section',
           { class: 'group' },
-          groupHead(group.title, { total: group.total, missing: group.missing, prefix: 'Spent ' }),
+          groupHead(group.title, { total: group.total, missing: group.missing, prefix: '' }),
           h('div', { class: 'cards' }, group.items.map(card)),
         ),
       ),
@@ -625,7 +619,7 @@ function boughtContent() {
             render();
           },
         },
-        `${state.showDropped ? 'Hide' : 'Show'} dropped wishes (${dropped.length})`,
+        `${state.showDropped ? 'Скрыть' : 'Показать'} отменённые (${dropped.length})`,
       ),
       state.showDropped ? h('div', { class: 'cards' }, dropped.map(card)) : null,
     );
@@ -653,7 +647,7 @@ function render() {
         state.error.title,
         state.error.text,
         state.error.retry
-          ? h('button', { type: 'button', class: 'button primary', onclick: () => location.reload() }, 'Try again')
+          ? h('button', { type: 'button', class: 'button primary', onclick: () => location.reload() }, 'Попробовать снова')
           : null,
       ),
     );
@@ -668,7 +662,7 @@ function render() {
     tabs(),
     state.tab === 'wishlist' ? toolbar() : null,
     h('main', { id: 'content' }, content()),
-    h('button', { type: 'button', class: 'fab', onclick: () => openForm() }, '＋ Add a wish'),
+    h('button', { type: 'button', class: 'fab', onclick: () => openForm() }, '+ Добавить'),
   );
 }
 
@@ -690,7 +684,7 @@ function planPicker({ current, onPick, confirmDay = false }) {
     type: 'date',
     min: now,
     value: selectedDay,
-    'aria-label': 'Exact day',
+    'aria-label': 'Точная дата',
     onchange: (event) => {
       if (confirmDay) setDay.disabled = !isValidDate(event.target.value);
       else if (isValidDate(event.target.value)) onPick({ plannedDate: event.target.value, plannedPrecision: 'day' });
@@ -704,13 +698,13 @@ function planPicker({ current, onPick, confirmDay = false }) {
       disabled: !isValidDate(selectedDay),
       onclick: () => isValidDate(dayInput.value) && onPick({ plannedDate: dayInput.value, plannedPrecision: 'day' }),
     },
-    'Set',
+    'Выбрать',
   );
 
   return h(
     'div',
     { class: 'plan-picker' },
-    h('div', { class: 'picker-label' }, 'Which month?'),
+    h('div', { class: 'picker-label' }, 'В каком месяце?'),
     h(
       'div',
       { class: 'month-grid' },
@@ -722,11 +716,11 @@ function planPicker({ current, onPick, confirmDay = false }) {
             class: `chip${selectedMonth === month ? ' selected' : ''}`,
             onclick: () => onPick({ plannedDate: month, plannedPrecision: 'month' }),
           },
-          index === 0 ? 'This month' : index === 1 ? 'Next month' : formatShortMonth(month, now),
+          index === 0 ? 'Этот месяц' : index === 1 ? 'Следующий' : formatShortMonth(month, now),
         ),
       ),
     ),
-    h('div', { class: 'picker-label' }, 'Or an exact day'),
+    h('div', { class: 'picker-label' }, 'Или точная дата'),
     h('div', { class: 'day-row' }, dayInput, confirmDay ? setDay : null),
     h(
       'button',
@@ -735,7 +729,7 @@ function planPicker({ current, onPick, confirmDay = false }) {
         class: `chip wide${current?.planned && !current.plannedDate ? ' selected' : ''}`,
         onclick: () => onPick({ plannedDate: null, plannedPrecision: null }),
       },
-      'Not sure yet, just mark it as planned',
+      'Пока не знаем — просто в план',
     ),
   );
 }
@@ -743,7 +737,7 @@ function planPicker({ current, onPick, confirmDay = false }) {
 function openWhenSheet(item) {
   haptic.tap();
   const sheet = openSheet({
-    title: item.planned ? 'Change the date' : 'When are we buying it?',
+    title: item.planned ? 'Изменить дату' : 'Когда покупаем?',
     render: () => [
       h('p', { class: 'sheet-subtitle' }, item.title),
       planPicker({
@@ -751,7 +745,7 @@ function openWhenSheet(item) {
         confirmDay: true,
         onPick: async (value) => {
           try {
-            await save(item.id, { planned: true, ...value }, 'Planned 🗓');
+            await save(item.id, { planned: true, ...value }, 'Запланировано');
             sheet.close();
           } catch {
             // toast already shown
@@ -766,14 +760,14 @@ function openWhenSheet(item) {
               class: 'button ghost danger block',
               onclick: async () => {
                 try {
-                  await save(item.id, { planned: false }, 'Removed from the plan');
+                  await save(item.id, { planned: false }, 'Убрано из плана');
                   sheet.close();
                 } catch {
                   // toast already shown
                 }
               },
             },
-            'Not planning to buy it anymore',
+            'Больше не планируем',
           )
         : null,
     ],
@@ -786,9 +780,8 @@ function planSection(item, sheet) {
     ? h(
         'div',
         { class: `plan-big tone-text-${plan.tone}` },
-        '🗓 ',
         h('b', {}, plan.label),
-        plan.tone === 'nodate' ? ' · date not set yet' : ` · ${plan.detail}`,
+        plan.tone === 'nodate' ? ' · дата не выбрана' : ` · ${plan.detail}`,
       )
     : null;
 
@@ -796,8 +789,8 @@ function planSection(item, sheet) {
     return h(
       'section',
       { class: 'panel' },
-      h('div', { class: 'panel-label' }, 'Planning to buy'),
-      bigDate || h('div', { class: 'muted' }, 'Not planned yet. Vote 👍 if we need it!'),
+      h('div', { class: 'panel-label' }, 'Планируем купить'),
+      bigDate || h('div', { class: 'muted' }, 'Пока не в плане. Голосуйте, если нужно!'),
     );
   }
 
@@ -812,8 +805,8 @@ function planSection(item, sheet) {
       h(
         'span',
         { class: 'switch-text' },
-        h('b', {}, 'Planning to buy'),
-        h('small', {}, item.planned ? 'We’re planning to buy this' : 'Switch on and pick when'),
+        h('b', {}, 'Планируем купить'),
+        h('small', {}, item.planned ? 'Это в плане покупок' : 'Включите и выберите когда'),
       ),
       h('input', {
         type: 'checkbox',
@@ -828,7 +821,7 @@ function planSection(item, sheet) {
             return;
           }
           sheet.ui.picking = false;
-          if (item.planned) await save(item.id, { planned: false }, 'Removed from the plan').catch(() => {});
+          if (item.planned) await save(item.id, { planned: false }, 'Убрано из плана').catch(() => {});
           sheet.refresh();
         },
       }),
@@ -848,7 +841,7 @@ function planSection(item, sheet) {
                 sheet.refresh();
               },
             },
-            'Change',
+            'Изменить',
           ),
         )
       : null,
@@ -858,7 +851,7 @@ function planSection(item, sheet) {
           confirmDay: true,
           onPick: async (value) => {
             try {
-              await save(item.id, { planned: true, ...value }, 'Planned 🗓');
+              await save(item.id, { planned: true, ...value }, 'Запланировано');
               sheet.ui.picking = false;
               sheet.refresh();
             } catch {
@@ -893,11 +886,11 @@ function detailContent(id, sheet) {
   if (item.status === 'wanted') {
     if (admin) {
       actions.push(
-        h('button', { type: 'button', class: 'button primary block', onclick: () => openBoughtSheet(item) }, '✅ Mark as bought'),
+        h('button', { type: 'button', class: 'button primary block', onclick: () => openBoughtSheet(item) }, 'Отметить купленным'),
       );
     }
     const row = [];
-    if (canEdit) row.push(h('button', { type: 'button', class: 'button', onclick: () => openForm(item) }, '✏️ Edit'));
+    if (canEdit) row.push(h('button', { type: 'button', class: 'button', onclick: () => openForm(item) }, 'Изменить'));
     if (admin) {
       row.push(
         h(
@@ -906,12 +899,12 @@ function detailContent(id, sheet) {
             type: 'button',
             class: 'button',
             onclick: async () => {
-              if (await confirmAction('Drop this wish? You can bring it back later from the Bought tab.')) {
-                save(item.id, { status: 'dropped' }, 'Dropped').catch(() => {});
+              if (await confirmAction('Отменить это желание? Его можно вернуть на вкладке «Куплено».')) {
+                save(item.id, { status: 'dropped' }, 'Отменено').catch(() => {});
               }
             },
           },
-          '🗄 Drop',
+          'Отменить',
         ),
       );
     }
@@ -927,9 +920,9 @@ function detailContent(id, sheet) {
           {
             type: 'button',
             class: 'button',
-            onclick: () => save(item.id, { status: 'wanted' }, 'Back on the wishlist').catch(() => {}),
+            onclick: () => save(item.id, { status: 'wanted' }, 'Снова в желаниях').catch(() => {}),
           },
-          '↩️ Back to wishlist',
+          'Вернуть в желания',
         ),
         deleteButton(item, sheet),
       ),
@@ -943,15 +936,15 @@ function detailContent(id, sheet) {
     h(
       'div',
       { class: 'detail-price' },
-      total != null ? money(total) : h('span', { class: 'muted' }, 'No price yet'),
+      total != null ? money(total) : h('span', { class: 'muted' }, 'Цена не указана'),
       total != null && item.quantity > 1 ? h('small', {}, ` · ${item.quantity} × ${money(item.price)}`) : null,
     ),
     item.link
       ? h(
           'button',
           { type: 'button', class: 'link-button', onclick: () => openExternal(item.link) },
-          h('span', {}, '🔗 ', hostOf(item.link)),
-          h('span', { class: 'muted' }, 'Open ↗'),
+          h('span', {}, hostOf(item.link)),
+          h('span', { class: 'muted' }, 'Открыть ↗'),
         )
       : null,
     item.note ? h('p', { class: 'note' }, item.note) : null,
@@ -962,7 +955,7 @@ function detailContent(id, sheet) {
           { class: 'panel' },
           h('div', { class: 'plan-big' }, statusText(item)),
           item.status === 'bought' && item.boughtPrice != null
-            ? h('div', { class: 'muted' }, `Paid ${money(item.boughtPrice)}`)
+            ? h('div', { class: 'muted' }, `Оплачено ${money(item.boughtPrice)}`)
             : null,
         ),
     item.status === 'wanted'
@@ -970,13 +963,13 @@ function detailContent(id, sheet) {
           'div',
           { class: 'votes-row' },
           voteButton(item, { withLabel: true }),
-          h('span', { class: 'muted small' }, item.voters.length ? item.voters.join(', ') : 'No votes yet'),
+          h('span', { class: 'muted small' }, item.voters.length ? item.voters.join(', ') : 'Пока никто не голосовал'),
         )
       : null,
     h(
       'p',
       { class: 'muted small added-by' },
-      `Added by ${item.createdBy?.name || 'someone'} · ${formatDay(item.createdAt.slice(0, 10), today())}`,
+      `Добавил(а) ${item.createdBy?.name || 'кто-то'} · ${formatDay(item.createdAt.slice(0, 10), today())}`,
     ),
     h('div', { class: 'actions' }, actions),
   ];
@@ -989,19 +982,19 @@ function deleteButton(item, sheet) {
       type: 'button',
       class: 'button danger',
       onclick: async () => {
-        if (!(await confirmAction('Delete this wish for good?'))) return;
+        if (!(await confirmAction('Удалить это желание навсегда?'))) return;
         try {
           await api(`/api/items/${item.id}`, { method: 'DELETE' });
           state.items = state.items.filter((candidate) => candidate.id !== item.id);
           sheet.close();
           refreshAll();
-          toast('Deleted');
+          toast('Удалено');
         } catch (error) {
           toast(error.message, 'error');
         }
       },
     },
-    '🗑 Delete',
+    'Удалить',
   );
 }
 
@@ -1015,15 +1008,15 @@ function openBoughtSheet(item) {
     inputmode: 'decimal',
     value: itemTotal(item) ?? '',
     placeholder: '0',
-    'aria-label': 'Price paid',
+    'aria-label': 'Сколько заплатили',
   });
-  const dateInput = h('input', { type: 'date', value: today(), max: today(), 'aria-label': 'Bought on' });
+  const dateInput = h('input', { type: 'date', value: today(), max: today(), 'aria-label': 'Дата покупки' });
   const sheet = openSheet({
-    title: 'Mark as bought',
+    title: 'Отметить купленным',
     render: () => [
       h('p', { class: 'sheet-subtitle' }, item.title),
-      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Price paid'), moneyInput(priceInput)),
-      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Bought on'), dateInput),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Сколько заплатили'), moneyInput(priceInput)),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Дата покупки'), dateInput),
       h(
         'button',
         {
@@ -1040,7 +1033,7 @@ function openBoughtSheet(item) {
                   boughtPrice: priceInput.value.trim() === '' ? null : priceInput.value,
                   boughtAt: dateInput.value || today(),
                 },
-                'Bought! 🎉',
+                'Куплено!',
               );
               sheet.close();
             } catch {
@@ -1048,7 +1041,7 @@ function openBoughtSheet(item) {
             }
           },
         },
-        'Mark as bought',
+        'Отметить купленным',
       ),
     ],
   });
@@ -1110,8 +1103,8 @@ function openForm(existing) {
     type: 'url',
     inputmode: 'url',
     autocomplete: 'off',
-    placeholder: 'Paste a shop or product link',
-    'aria-label': 'Link',
+    placeholder: 'Вставьте ссылку на товар',
+    'aria-label': 'Ссылка',
     value: existing?.link || '',
   });
   const linkHint = h('div', { class: 'field-hint' });
@@ -1120,36 +1113,36 @@ function openForm(existing) {
   const titleInput = h('input', {
     type: 'text',
     maxlength: '200',
-    placeholder: 'e.g. Shure SM58 microphone',
-    'aria-label': 'Name',
+    placeholder: 'Например, микрофон Shure SM58',
+    'aria-label': 'Название',
     value: existing?.title || '',
   });
   const priceInput = h('input', {
     type: 'text',
     inputmode: 'decimal',
     placeholder: '0',
-    'aria-label': 'Price per piece',
+    'aria-label': 'Цена за штуку',
     value: existing?.price ?? '',
   });
   const noteInput = h('textarea', {
     rows: '3',
     maxlength: '2000',
-    placeholder: 'Why do we need it? Model, size, colour…',
-    'aria-label': 'Note',
+    placeholder: 'Зачем нужно? Модель, размер, цвет…',
+    'aria-label': 'Заметка',
     value: existing?.note || '',
   });
   const quantityValue = h('span', { class: 'quantity-value' }, form.quantity);
   const requirement = h('div', { class: 'requirement' });
-  const saveButton = h('button', { type: 'submit', class: 'button primary block' }, existing ? 'Save changes' : 'Add to wishlist');
+  const saveButton = h('button', { type: 'submit', class: 'button primary block' }, existing ? 'Сохранить' : 'Добавить в вишлист');
   const planWrap = h('div');
 
   function validate() {
     const hasSource = linkInput.value.trim() || form.image;
     const hasTitle = titleInput.value.trim();
     requirement.textContent = !hasSource
-      ? 'Add a photo or a link. One of them is required.'
+      ? 'Добавьте фото или ссылку — что-то одно обязательно.'
       : !hasTitle
-        ? 'Give it a name.'
+        ? 'Укажите название.'
         : '';
     saveButton.disabled = !hasSource || !hasTitle || uploading || saving;
   }
@@ -1162,16 +1155,16 @@ function openForm(existing) {
         : h(
             'button',
             { type: 'button', class: 'image-empty', onclick: () => fileInput.click() },
-            h('span', { class: 'image-empty-icon' }, '📷'),
-            h('span', {}, 'Add a photo'),
-            h('small', {}, 'or paste a link above and we’ll grab the picture'),
+            h('span', { class: 'image-empty-icon' }, '+'),
+            h('span', {}, 'Добавить фото'),
+            h('small', {}, 'или вставьте ссылку выше — картинка подтянется сама'),
           ),
       busy ? h('div', { class: 'image-busy' }, h('span', { class: 'spinner' })) : null,
       form.imageUrl
         ? h(
             'div',
             { class: 'image-actions' },
-            h('button', { type: 'button', class: 'button small', onclick: () => fileInput.click() }, 'Replace'),
+            h('button', { type: 'button', class: 'button small', onclick: () => fileInput.click() }, 'Заменить'),
             h(
               'button',
               {
@@ -1183,7 +1176,7 @@ function openForm(existing) {
                   validate();
                 },
               },
-              'Remove',
+              'Убрать',
             ),
           )
         : null,
@@ -1201,7 +1194,7 @@ function openForm(existing) {
     lastLookup = value;
     const seq = ++lookupSeq;
     fetchingLink = form.imageSource !== 'upload';
-    setHint('Looking at the link…', 'loading');
+    setHint('Смотрим ссылку…', 'loading');
     drawImage();
     try {
       const preview = await api(`/api/preview?url=${encodeURIComponent(value)}`);
@@ -1209,30 +1202,30 @@ function openForm(existing) {
       const found = [];
       if (preview.image && form.imageSource !== 'upload') {
         Object.assign(form, { image: preview.image, imageUrl: preview.imageUrl, imageSource: 'link' });
-        found.push('picture');
+        found.push('фото');
       }
       if (preview.title && !titleInput.value.trim()) {
         titleInput.value = preview.title;
-        found.push('name');
+        found.push('название');
       }
       let otherCurrency = '';
       if (preview.price != null && !priceInput.value.trim()) {
         if (!preview.currency || preview.currency === currency()) {
           priceInput.value = preview.price;
-          found.push('price');
+          found.push('цену');
         } else {
-          otherCurrency = ` The shop shows ${preview.price} ${preview.currency}.`;
+          otherCurrency = ` В магазине: ${preview.price} ${preview.currency}.`;
         }
       }
       const site = preview.siteName || hostOf(preview.link);
       if (found.length) {
-        const list = found.length > 1 ? `${found.slice(0, -1).join(', ')} and ${found.at(-1)}` : found[0];
-        setHint(`✓ Got the ${list} from ${site}.${otherCurrency}`, 'ok');
+        const list = found.length > 1 ? `${found.slice(0, -1).join(', ')} и ${found.at(-1)}` : found[0];
+        setHint(`✓ Взяли ${list} с ${site}.${otherCurrency}`, 'ok');
       } else {
-        setHint(`Saved the link to ${site}.${otherCurrency}`, 'ok');
+        setHint(`Ссылка на ${site} сохранена.${otherCurrency}`, 'ok');
       }
       if (!preview.image && !form.image) {
-        setHint(`${linkHint.textContent} No picture found there. The link is enough, or add a photo.`, 'warn');
+        setHint(`${linkHint.textContent} Картинку найти не удалось — хватит и ссылки, или добавьте фото.`, 'warn');
       }
       haptic.success();
     } catch (error) {
@@ -1294,7 +1287,7 @@ function openForm(existing) {
               type: 'button',
               role: 'radio',
               'aria-checked': String(form[key] === option.id),
-              class: `chip ${key === 'category' ? 'cat' : 'prio'}-${option.id}${form[key] === option.id ? ' selected' : ''}`,
+              class: `chip${form[key] === option.id ? ' selected' : ''}`,
               onclick: () => {
                 form[key] = option.id;
                 haptic.tap();
@@ -1327,8 +1320,8 @@ function openForm(existing) {
           h(
             'span',
             { class: 'switch-text' },
-            h('b', {}, 'Planning to buy'),
-            h('small', {}, plan ? `${plan.label}${planText(plan)}` : 'Not planned yet'),
+            h('b', {}, 'Планируем купить'),
+            h('small', {}, plan ? `${plan.label}${planText(plan)}` : 'Пока не в плане'),
           ),
           h('input', {
             type: 'checkbox',
@@ -1363,7 +1356,7 @@ function openForm(existing) {
     if (saveButton.disabled) return;
     saving = true;
     validate();
-    saveButton.textContent = 'Saving…';
+    saveButton.textContent = 'Сохраняем…';
     const body = {
       title: titleInput.value,
       note: noteInput.value,
@@ -1386,13 +1379,13 @@ function openForm(existing) {
       if (!existing && state.tab === 'bought') state.tab = 'wishlist';
       upsert(item);
       haptic.success();
-      toast(existing ? 'Saved' : 'Added to the wishlist 🎉');
+      toast(existing ? 'Сохранено' : 'Добавлено в вишлист');
       sheet.close();
     } catch (error) {
       haptic.error();
       toast(error.message, 'error');
       saving = false;
-      saveButton.textContent = existing ? 'Save changes' : 'Add to wishlist';
+      saveButton.textContent = existing ? 'Сохранить' : 'Добавить в вишлист';
       validate();
     }
   }
@@ -1404,33 +1397,33 @@ function openForm(existing) {
   const field = (label, ...controls) => h('div', { class: 'field' }, h('span', { class: 'field-label' }, label), controls);
 
   const sheet = openSheet({
-    title: existing ? 'Edit wish' : 'Add a wish',
+    title: existing ? 'Изменить желание' : 'Новое желание',
     tall: true,
     render: () =>
       h(
         'form',
         { class: 'form', onsubmit: submit, novalidate: true },
-        field('Link', linkInput, linkHint),
-        field('Photo', imageBox, fileInput),
-        field('Name', titleInput),
-        field('Category', choice(CATEGORIES, 'category')),
-        field('Priority', choice(PRIORITIES, 'priority')),
+        field('Ссылка', linkInput, linkHint),
+        field('Фото', imageBox, fileInput),
+        field('Название', titleInput),
+        field('Категория', choice(CATEGORIES, 'category')),
+        field('Важность', choice(PRIORITIES, 'priority')),
         h(
           'div',
           { class: 'field-row' },
-          field('Price per piece', moneyInput(priceInput)),
+          field('Цена за штуку', moneyInput(priceInput)),
           field(
-            'Quantity',
+            'Количество',
             h(
               'div',
               { class: 'stepper' },
-              h('button', { type: 'button', 'aria-label': 'Fewer', onclick: () => stepQuantity(-1) }, '−'),
+              h('button', { type: 'button', 'aria-label': 'Меньше', onclick: () => stepQuantity(-1) }, '−'),
               quantityValue,
-              h('button', { type: 'button', 'aria-label': 'More', onclick: () => stepQuantity(1) }, '+'),
+              h('button', { type: 'button', 'aria-label': 'Больше', onclick: () => stepQuantity(1) }, '+'),
             ),
           ),
         ),
-        field('Note', noteInput),
+        field('Заметка', noteInput),
         planWrap,
         h('div', { class: 'form-footer' }, requirement, saveButton),
       ),
@@ -1464,8 +1457,8 @@ async function boot() {
   if (!initData) {
     state.error = {
       emoji: '📱',
-      title: 'Open this in Telegram',
-      text: 'The HOROVOD wishlist runs inside Telegram. Open it from the HOROVOD bot.',
+      title: 'Откройте в Telegram',
+      text: 'Вишлист HOROVOD работает внутри Telegram. Откройте его через бота HOROVOD.',
     };
     render();
     return;
@@ -1479,8 +1472,8 @@ async function boot() {
   } catch (error) {
     state.error =
       error.status === 403
-        ? { emoji: '🔒', title: 'Members only', text: `${error.message} Ask an admin to add you to the HOROVOD group.` }
-        : { title: 'Couldn’t load the wishlist', text: error.message, retry: true };
+        ? { emoji: '🔒', title: 'Только для своих', text: `${error.message} Попросите админа добавить вас в группу HOROVOD.` }
+        : { title: 'Не удалось загрузить вишлист', text: error.message, retry: true };
     render();
     return;
   }

@@ -55,9 +55,9 @@ test('sends a reminder once per planned date', async () => {
   await ctx.app.bot.runReminders();
   const messages = ctx.telegram.sent('sendMessage').slice(before);
   assert.equal(messages.length, 1);
-  assert.match(messages[0].params.text, /Coming up to buy/);
-  assert.match(messages[0].params.text, /PA speakers<\/b> — tomorrow/);
-  assert.match(messages[0].params.text, /€900/);
+  assert.match(messages[0].params.text, /Скоро покупаем/);
+  assert.match(messages[0].params.text, /PA speakers<\/b> — завтра/);
+  assert.match(messages[0].params.text, /900\s€/);
 
   store.meta.lastReminderDay = null;
   await ctx.app.bot.runReminders();
@@ -70,10 +70,10 @@ test('/plan lists planned purchases for members only', async () => {
     await ctx.app.bot.handleMessage({ text: '/plan', chat, from: { id: from } });
     return ctx.telegram.sent('sendMessage').slice(before)[0].params.text;
   };
-  assert.match(await reply(2), /Purchase plan/);
+  assert.match(await reply(2), /План покупок/);
   assert.match(await reply(2), /PA speakers/);
-  assert.match(await reply(99), /only for HOROVOD members/);
-  assert.match(await reply(99, { id: -100500, type: 'supergroup' }), /Purchase plan/);
+  assert.match(await reply(99), /только для участников HOROVOD/);
+  assert.match(await reply(99, { id: -100500, type: 'supergroup' }), /План покупок/);
 });
 
 test('/chatid helps with setup and /start offers the app', async () => {

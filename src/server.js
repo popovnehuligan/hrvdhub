@@ -50,22 +50,22 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
   async function authenticate(req) {
     const header = req.headers.authorization || '';
     const session = validateInitData(header.startsWith('tma ') ? header.slice(4) : '', config.botToken);
-    if (!session) throw new HttpError(401, 'Please open the wishlist from Telegram again.');
+    if (!session) throw new HttpError(401, 'Откройте вишлист из Telegram ещё раз.');
     let result;
     try {
       result = await access.check(session.user.id);
     } catch (error) {
       console.error(`Membership check failed: ${error.message}`);
-      throw new HttpError(503, "Couldn't reach Telegram to check your membership. Try again in a moment.");
+      throw new HttpError(503, 'Не удалось проверить участие через Telegram. Попробуйте чуть позже.');
     }
-    if (!result.allowed) throw new HttpError(403, 'This wishlist is only for HOROVOD members.');
+    if (!result.allowed) throw new HttpError(403, 'Этот вишлист только для участников HOROVOD.');
     return { user: session.user, userId: session.user.id, isAdmin: result.admin };
   }
 
   function checkPreviewRate(userId) {
     const now = Date.now();
     const recent = (previewLog.get(userId) || []).filter((time) => now - time < 60_000);
-    if (recent.length >= PREVIEWS_PER_MINUTE) throw new HttpError(429, 'Too many links at once. Wait a minute.');
+    if (recent.length >= PREVIEWS_PER_MINUTE) throw new HttpError(429, 'Слишком много ссылок подряд. Подождите минуту.');
     recent.push(now);
     previewLog.set(userId, recent);
   }
@@ -82,7 +82,7 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
 
   function checkImage(patch) {
     if (patch.image && !imageExists(patch.image, config.uploadsDir)) {
-      throw new HttpError(400, 'That photo is no longer here. Please add it again.');
+      throw new HttpError(400, 'Фото потерялось. Добавьте его ещё раз.');
     }
   }
 
@@ -103,7 +103,7 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
       const patch = cleanItemInput(await readJson(req), { isAdmin: ctx.isAdmin, isNew: true, today: today() });
       checkImage(patch);
       const item = newItem(patch, { user: ctx.user, currency: config.currency });
-      if (!item.link && !item.image) throw new HttpError(400, 'Add a photo or a link');
+      if (!item.link && !item.image) throw new HttpError(400, 'Добавьте фото или ссылку');
       if (item.link && !item.image) {
         item.image = await imageFromLink(item.link);
         if (item.image) item.imageSource = 'link';
@@ -115,26 +115,26 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
 
     if (route === 'GET /api/preview') {
       const link = normalizeLink(url.searchParams.get('url') || '');
-      if (!link) throw new HttpError(400, 'Paste a link first');
+      if (!link) throw new HttpError(400, 'Сначала вставьте ссылку');
       checkPreviewRate(ctx.userId);
       try {
         const preview = await fetchLinkPreview(link, { uploadsDir: config.uploadsDir, allowPrivate: config.allowPrivateUrls });
         return sendJson(res, 200, { ...preview, link, imageUrl: preview.image ? `/uploads/${preview.image}` : null });
       } catch (error) {
         console.warn(`Preview failed for ${link}: ${error.message}`);
-        throw new HttpError(422, "Couldn't open that link. You can still save it, or add a photo yourself.");
+        throw new HttpError(422, 'Не получилось открыть ссылку. Её всё равно можно сохранить или добавить фото вручную.');
       }
     }
 
     if (route === 'POST /api/uploads') {
       const image = saveImage(await readBody(req, MAX_UPLOAD_BYTES), config.uploadsDir);
-      if (!image) throw new HttpError(415, 'Please use a JPG, PNG, WebP or GIF picture.');
+      if (!image) throw new HttpError(415, 'Нужна картинка JPG, PNG, WebP или GIF.');
       return sendJson(res, 201, { image, imageUrl: `/uploads/${image}` });
     }
 
     const match = url.pathname.match(/^\/api\/items\/([\w-]+)(\/vote)?$/);
     const item = match && store.get(match[1]);
-    if (match && !item) throw new HttpError(404, 'That wish no longer exists.');
+    if (match && !item) throw new HttpError(404, 'Этого желания больше нет.');
     const canEdit = item && (ctx.isAdmin || (item.createdBy?.id === ctx.userId && item.status === 'wanted'));
 
     if (match?.[2] && req.method === 'POST') {
@@ -146,11 +146,11 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
     }
 
     if (match && !match[2] && req.method === 'PATCH') {
-      if (!canEdit) throw new HttpError(403, 'You can only edit wishes you added.');
+      if (!canEdit) throw new HttpError(403, 'Можно менять только свои желания.');
       const patch = cleanItemInput(await readJson(req), { isAdmin: ctx.isAdmin, isNew: false, today: today() });
       checkImage(patch);
       const next = { ...item, ...patch };
-      if (!next.link && !next.image) throw new HttpError(400, 'Add a photo or a link');
+      if (!next.link && !next.image) throw new HttpError(400, 'Добавьте фото или ссылку');
       if (next.link && !next.image && next.link !== item.link) {
         next.image = await imageFromLink(next.link);
         if (next.image) next.imageSource = 'link';
@@ -165,7 +165,7 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
     }
 
     if (match && !match[2] && req.method === 'DELETE') {
-      if (!canEdit) throw new HttpError(403, 'You can only delete wishes you added.');
+      if (!canEdit) throw new HttpError(403, 'Можно удалять только свои желания.');
       store.remove(item.id);
       return sendJson(res, 200, { ok: true });
     }
@@ -223,7 +223,7 @@ export function createApp(config, { telegram = new Telegram(config.botToken, con
       const status = error instanceof HttpError ? error.status : 500;
       if (status === 500) console.error(error);
       if (res.headersSent) return res.destroy();
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on our side.' : error.message });
+      sendJson(res, status, { error: status === 500 ? 'Что-то сломалось на нашей стороне.' : error.message });
     });
   });
 

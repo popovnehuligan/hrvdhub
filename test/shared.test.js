@@ -23,30 +23,32 @@ const planned = (plannedDate, plannedPrecision = 'day', extra = {}) => ({
 
 test('describePlan reads clearly for exact days', () => {
   assert.equal(describePlan({ planned: false }, TODAY), null);
-  assert.deepEqual(describePlan(planned('2026-09-27'), TODAY), { tone: 'soon', label: 'Today', detail: 'Sun 27 Sep' });
-  assert.equal(describePlan(planned('2026-09-28'), TODAY).label, 'Tomorrow');
-  assert.equal(describePlan(planned('2026-10-01'), TODAY).label, 'In 4 days');
+  assert.deepEqual(describePlan(planned('2026-09-27'), TODAY), { tone: 'soon', label: 'Сегодня', detail: 'вс, 27 сен', short: '27 сен' });
+  assert.equal(describePlan(planned('2026-09-28'), TODAY).label, 'Завтра');
+  assert.equal(describePlan(planned('2026-10-01'), TODAY).label, 'Через 4 дня');
   assert.equal(describePlan(planned('2026-10-08'), TODAY).tone, 'upcoming');
-  assert.equal(describePlan(planned('2026-10-25'), TODAY).label, 'In 4 weeks');
-  assert.equal(describePlan(planned('2027-01-20'), TODAY).label, 'In 4 months');
-  assert.equal(describePlan(planned('2027-01-20'), TODAY).detail, 'Wed 20 Jan 2027');
+  assert.equal(describePlan(planned('2026-10-25'), TODAY).label, 'Через 4 недели');
+  assert.equal(describePlan(planned('2027-01-20'), TODAY).label, 'Через 4 месяца');
+  assert.equal(describePlan(planned('2027-01-20'), TODAY).detail, 'ср, 20 янв 2027');
   assert.deepEqual(describePlan(planned('2026-09-24'), TODAY), {
     tone: 'overdue',
-    label: '3 days overdue',
-    detail: 'Thu 24 Sep',
+    label: 'Просрочено на 3 дня',
+    detail: 'чт, 24 сен',
+    short: '24 сен',
   });
 });
 
 test('describePlan reads clearly for months and undated plans', () => {
   assert.deepEqual(describePlan(planned('2026-09-01', 'month'), TODAY), {
     tone: 'soon',
-    label: 'This month',
-    detail: 'September 2026',
+    label: 'В этом месяце',
+    detail: 'Сентябрь 2026',
+    short: 'Сентябрь',
   });
-  assert.equal(describePlan(planned('2026-10-01', 'month'), TODAY).label, 'Next month');
-  assert.equal(describePlan(planned('2027-02-01', 'month'), TODAY).label, 'In 5 months');
+  assert.equal(describePlan(planned('2026-10-01', 'month'), TODAY).label, 'В следующем месяце');
+  assert.equal(describePlan(planned('2027-02-01', 'month'), TODAY).label, 'Через 5 месяцев');
   assert.equal(describePlan(planned('2026-08-01', 'month'), TODAY).tone, 'overdue');
-  assert.deepEqual(describePlan(planned(null), TODAY), { tone: 'nodate', label: 'Planned', detail: 'date not set' });
+  assert.deepEqual(describePlan(planned(null), TODAY), { tone: 'nodate', label: 'В плане', detail: 'дата не выбрана', short: 'без даты' });
 });
 
 test('groupPlan orders overdue, months, then undated, with totals', () => {
@@ -70,8 +72,8 @@ test('groupPlan orders overdue, months, then undated, with totals', () => {
     ],
   );
   const october = groups[1];
-  assert.equal(october.title, 'October 2026');
-  assert.equal(october.note, 'Next month');
+  assert.equal(october.title, 'Октябрь 2026');
+  assert.equal(october.note, 'В следующем');
   assert.equal(october.total, 50);
   assert.equal(october.missing, 1);
   assert.equal(groups[2].total, 200);
@@ -87,8 +89,8 @@ test('groupBought groups by month with what was paid', () => {
   assert.deepEqual(
     groups.map((group) => [group.title, group.total]),
     [
-      ['September 2026', 120],
-      ['August 2026', 5],
+      ['Сентябрь 2026', 120],
+      ['Август 2026', 5],
     ],
   );
 });
@@ -113,12 +115,12 @@ test('compareItems sorts the wishlist by buy date, then priority and votes', () 
 });
 
 test('money and dates format consistently', () => {
-  assert.equal(formatMoney(1299, 'EUR'), '€1,299');
-  assert.equal(formatMoney(12.5, 'EUR'), '€12.50');
+  assert.equal(formatMoney(1299, 'EUR').replace(/\s/g, ' '), '1 299 €');
+  assert.equal(formatMoney(12.5, 'EUR').replace(/\s/g, ' '), '12,50 €');
   assert.equal(formatMoney(null, 'EUR'), '');
   assert.equal(itemTotal({ price: 19.99, quantity: 3 }), 59.97);
   assert.equal(itemTotal({ price: null }), null);
   assert.deepEqual(sumTotals([{ price: 1 }, { price: null }, { price: 2, quantity: 2 }]), { total: 5, missing: 1 });
   assert.equal(addMonths('2026-12-31', 1), '2027-01-01');
-  assert.equal(formatDay('2026-10-12', TODAY), 'Mon 12 Oct');
+  assert.equal(formatDay('2026-10-12', TODAY), 'пн, 12 окт');
 });
