@@ -97,6 +97,7 @@ npm test                             # run the tests
 cp .env.example .env                 # add BOT_TOKEN
 npm run dev                          # start with auto-reload on http://localhost:3000
 npm run dev-link -- <your user id>   # prints a link that opens the app in a normal browser as you
+npm run demo                         # sample wishlist in data-demo/; then DATA_DIR=data-demo npm start
 ```
 
 The project has no dependencies and no build step:

@@ -12,6 +12,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test test/*.test.js",
-    "dev-link": "node scripts/dev-link.js"
+    "dev-link": "node scripts/dev-link.js",
+    "demo": "node scripts/demo.js"
   }
 }

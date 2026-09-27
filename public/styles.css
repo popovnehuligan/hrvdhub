@@ -305,33 +305,7 @@ p {
   box-shadow: none;
 }
 
-/* ---------- Cards ---------- */
-
-.cards {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-}
-
-.card {
-  --edge: var(--line);
-  display: flex;
-  gap: 14px;
-  padding: 12px;
-  background: var(--surface);
-  border-radius: var(--radius);
-  box-shadow: inset 0 0 0 1.5px var(--edge), var(--shadow);
-  cursor: pointer;
-}
-
-.card.tone-overdue {
-  --edge: var(--red);
-}
-
-.card:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: 2px;
-}
+/* ---------- Pictures ---------- */
 
 .thumb,
 .hero {
@@ -342,14 +316,15 @@ p {
   place-items: center;
 }
 
-.thumb {
-  width: 88px;
-  height: 88px;
-  border-radius: 14px;
+.thumb,
+.hero {
+  position: relative;
 }
 
 .thumb img,
 .hero img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -389,16 +364,113 @@ p {
   white-space: nowrap;
 }
 
-.card-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.card-title {
-  font-size: 16px;
+.meta .sep {
+  margin: 0 5px;
+}
+
+.meta .must {
+  color: var(--text);
+  font-weight: 800;
+}
+
+/* ---------- Wishlist tiles ---------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 12px;
+}
+
+@media (min-width: 560px) {
+  .tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.tile {
+  display: grid;
+  gap: 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.tile:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+}
+
+.tile-media {
+  position: relative;
+}
+
+.tile-media .thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.tile-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--charcoal);
+  color: var(--cream);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile-badge.tone-overdue {
+  background: var(--red);
+  color: var(--on-red);
+}
+
+.tile-badge.tone-nodate {
+  background: var(--cream);
+  color: var(--charcoal);
+  box-shadow: inset 0 0 0 1.5px var(--charcoal);
+}
+
+.tile-media .vote {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  background: rgba(251, 249, 244, 0.92);
+  color: var(--charcoal);
+  box-shadow: inset 0 0 0 1px rgba(45, 42, 40, 0.12);
+}
+
+.tile-media .vote.voted {
+  background: var(--charcoal);
+  color: var(--cream);
+}
+
+.tile-body {
+  display: grid;
+  gap: 3px;
+  padding: 0 2px;
+  min-width: 0;
+}
+
+.tile-title {
+  font-size: 15px;
   font-weight: 800;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -408,138 +480,154 @@ p {
   overflow: hidden;
 }
 
-.meta {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.meta .sep {
-  margin: 0 6px;
-}
-
-.meta .must {
-  color: var(--text);
-  font-weight: 800;
-}
-
-.price-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
-}
-
-.price {
+.tile-price {
   font-size: 15px;
   font-weight: 800;
+  margin-top: 2px;
 }
 
-.price small {
+.tile-price small {
   font-weight: 600;
   color: var(--muted);
 }
 
-.price.missing {
-  font-weight: 600;
-  color: var(--muted);
+/* ---------- Rows (plan, purchases) ---------- */
+
+.rows {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1.5px var(--line);
+  overflow: hidden;
 }
 
-.card-foot {
-  margin-top: auto;
-  padding-top: 2px;
+.row {
   display: flex;
-  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 10px 10px;
+  cursor: pointer;
 }
 
-.card-foot:empty {
+.row + .row {
+  border-top: 1px solid var(--line);
+}
+
+.row .thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.row .placeholder-host {
   display: none;
 }
 
-/* The planned date: a solid colour block, so it reads at a glance. */
-.plan-chip {
-  --chip: var(--field);
-  --on-chip: var(--text);
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.row .placeholder-eye {
+  width: 20px;
+  height: 27px;
+}
+
+.row-main {
+  flex: 1;
   min-width: 0;
-  max-width: 100%;
-  border: 0;
-  border-radius: 999px;
-  padding: 6px 12px 6px 8px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  background: var(--chip);
-  color: var(--on-chip);
+  display: grid;
+  gap: 2px;
 }
 
-.plan-chip b {
+.row-title {
   font-weight: 800;
-}
-
-.plan-chip .plan-detail {
+  font-size: 15px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.plan-chip.off {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--line);
+.row-when {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--muted);
-  font-weight: 700;
 }
 
-.plan-chip.tone-overdue {
-  --chip: var(--red);
-  --on-chip: var(--on-red);
-}
-.plan-chip.tone-soon,
-.plan-chip.tone-upcoming,
-.plan-chip.tone-later {
-  --chip: var(--ink-button);
-  --on-chip: var(--on-ink-button);
-}
-.plan-chip.tone-nodate {
-  --chip: transparent;
-  --on-chip: var(--text);
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+.row-when.tone-text-overdue {
+  color: var(--red);
 }
 
-.mini-switch {
+.row-price {
   flex: none;
-  position: relative;
-  width: 26px;
-  height: 15px;
-  border-radius: 99px;
-  background: var(--line);
+  font-weight: 800;
+  font-size: 15px;
 }
 
-.mini-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--surface);
-  transition: transform 0.15s;
+/* ---------- Next purchase (in the header) ---------- */
+
+.next {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 18px;
+  padding: 10px 14px 10px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: rgba(246, 242, 233, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(246, 242, 233, 0.14);
+  color: var(--cream);
+  text-align: left;
 }
 
-.mini-switch.on {
-  background: var(--on-chip);
+.next .thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
 }
 
-.mini-switch.on::after {
-  background: var(--chip);
-  transform: translateX(11px);
+.next .placeholder-host {
+  display: none;
+}
+
+.next-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.next-kicker {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #d9a55e;
+}
+
+.next-title {
+  font-weight: 800;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.next-when {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(246, 242, 233, 0.75);
+}
+
+.next-when.tone-overdue {
+  color: #ff8a80;
+}
+
+.next-price {
+  flex: none;
+  font-weight: 800;
 }
 
 .tone-text-overdue {

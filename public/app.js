@@ -273,49 +273,8 @@ function metaLine(item) {
   );
 }
 
-function priceLine(item) {
-  if (item.status === 'bought') {
-    const paid = item.boughtPrice ?? itemTotal(item);
-    return h('div', { class: 'price' }, paid != null ? `Оплачено ${money(paid)}` : 'Куплено');
-  }
-  const total = itemTotal(item);
-  if (total == null) return h('div', { class: 'price missing' }, 'Цена не указана');
-  return h(
-    'div',
-    { class: 'price' },
-    money(total),
-    item.quantity > 1 ? h('small', {}, ` · ${item.quantity} × ${money(item.price)}`) : null,
-  );
-}
-
 function planText(plan) {
   return plan.tone === 'nodate' ? ' · дата не выбрана' : ` · ${plan.detail}`;
-}
-
-/** The "Planned" toggle on a card. Admins tap it to plan / change the date. */
-function planChip(item) {
-  const plan = describePlan(item, today());
-  if (!plan) {
-    if (!isAdmin()) return null;
-    return h(
-      'button',
-      { type: 'button', class: 'plan-chip off', onclick: stop(() => openWhenSheet(item)), 'aria-label': 'Запланировать покупку' },
-      h('span', { class: 'mini-switch' }),
-      'Запланировать',
-    );
-  }
-  const content = [h('b', {}, plan.label), h('span', { class: 'plan-detail' }, ` · ${plan.short}`)];
-  if (!isAdmin()) return h('span', { class: `plan-chip tone-${plan.tone}` }, content);
-  return h(
-    'button',
-    {
-      type: 'button',
-      class: `plan-chip tone-${plan.tone}`,
-      onclick: stop(() => openWhenSheet(item)),
-      'aria-label': `В плане: ${plan.label}${planText(plan)}. Изменить`,
-    },
-    content,
-  );
 }
 
 function voteButton(item, { withLabel = false } = {}) {
@@ -333,12 +292,46 @@ function voteButton(item, { withLabel = false } = {}) {
   );
 }
 
-function card(item) {
+/** Wishlist grid tile: picture first, the plan date and votes sit on the picture. */
+function tile(item) {
   const plan = describePlan(item, today());
+  const total = itemTotal(item);
   return h(
     'article',
     {
-      class: `card${plan && item.status === 'wanted' ? ` tone-${plan.tone}` : ''}`,
+      class: 'tile',
+      tabindex: '0',
+      onclick: () => openDetail(item.id),
+      onkeydown: (event) => event.key === 'Enter' && openDetail(item.id),
+    },
+    h(
+      'div',
+      { class: 'tile-media' },
+      thumb(item),
+      plan ? h('span', { class: `tile-badge tone-${plan.tone}` }, plan.tone === 'nodate' ? 'В плане' : `${plan.label}`) : null,
+      voteButton(item),
+    ),
+    h(
+      'div',
+      { class: 'tile-body' },
+      metaLine(item),
+      h('h3', { class: 'tile-title' }, item.title),
+      h(
+        'div',
+        { class: 'tile-price' },
+        total != null ? money(total) : h('span', { class: 'muted' }, 'Цена не указана'),
+        total != null && item.quantity > 1 ? h('small', {}, ` · ${item.quantity} шт.`) : null,
+      ),
+    ),
+  );
+}
+
+/** Compact row for the plan and purchases: picture, name, when, price. */
+function row(item, { when, tone, price }) {
+  return h(
+    'article',
+    {
+      class: 'row',
       tabindex: '0',
       onclick: () => openDetail(item.id),
       onkeydown: (event) => event.key === 'Enter' && openDetail(item.id),
@@ -346,15 +339,20 @@ function card(item) {
     thumb(item),
     h(
       'div',
-      { class: 'card-main' },
-      metaLine(item),
-      h('h3', { class: 'card-title' }, item.title),
-      h('div', { class: 'price-row' }, priceLine(item), item.status === 'wanted' ? voteButton(item) : null),
-      item.status === 'wanted'
-        ? h('div', { class: 'card-foot' }, planChip(item))
-        : h('div', { class: 'card-foot' }, h('span', { class: 'muted small' }, statusText(item))),
+      { class: 'row-main' },
+      h('div', { class: 'row-title' }, item.title),
+      h('div', { class: `row-when${tone ? ` tone-text-${tone}` : ''}` }, when),
     ),
+    h('div', { class: 'row-price' }, price != null ? money(price) : '—'),
   );
+}
+
+function planRow(item) {
+  const plan = describePlan(item, today());
+  let when = `${plan.label} · ${plan.short}`;
+  if (plan.tone === 'nodate') when = 'Дата не выбрана';
+  else if (item.plannedPrecision === 'month') when = plan.label;
+  return row(item, { when, tone: plan.tone === 'overdue' ? 'overdue' : null, price: itemTotal(item) });
 }
 
 function statusText(item) {
@@ -418,6 +416,27 @@ function header() {
       `${wanted.length} ${plural(wanted.length, 'желание', 'желания', 'желаний')} · ${planned.length} в плане`,
       total ? ` · ${money(total)}` : '',
     ),
+    nextPurchase(planned),
+  );
+}
+
+function nextPurchase(planned) {
+  const next = planned.filter((item) => item.plannedDate).sort(compareItems('schedule'))[0];
+  if (!next) return null;
+  const plan = describePlan(next, today());
+  const total = itemTotal(next);
+  return h(
+    'button',
+    { type: 'button', class: 'next', onclick: () => openDetail(next.id) },
+    thumb(next),
+    h(
+      'span',
+      { class: 'next-main' },
+      h('span', { class: 'next-kicker' }, plan.tone === 'overdue' ? 'Пора купить' : 'Ближайшая покупка'),
+      h('span', { class: 'next-title' }, next.title),
+      h('span', { class: `next-when tone-${plan.tone}` }, `${plan.label} · ${plan.short}`),
+    ),
+    total != null ? h('span', { class: 'next-price' }, money(total)) : null,
   );
 }
 
@@ -527,7 +546,7 @@ function wishlistContent() {
     .filter((item) => !query || `${item.title} ${item.note} ${hostOf(item.link)}`.toLowerCase().includes(query))
     .sort(compareItems(state.sort));
   if (!list.length) return emptyState('🔍', 'Ничего не найдено', 'Попробуйте другой запрос или категорию.');
-  return h('div', { class: 'cards' }, list.map(card));
+  return h('div', { class: 'tiles' }, list.map(tile));
 }
 
 function planContent() {
@@ -568,7 +587,7 @@ function planContent() {
           total: group.total,
           missing: group.missing,
         }),
-        h('div', { class: 'cards' }, group.items.map(card)),
+        h('div', { class: 'rows' }, group.items.map(planRow)),
       ),
     ),
   ];
@@ -602,7 +621,16 @@ function boughtContent() {
           'section',
           { class: 'group' },
           groupHead(group.title, { total: group.total, missing: group.missing, prefix: '' }),
-          h('div', { class: 'cards' }, group.items.map(card)),
+          h(
+            'div',
+            { class: 'rows' },
+            group.items.map((item) =>
+              row(item, {
+                when: item.boughtAt ? `Куплено ${formatDay(item.boughtAt, today())}` : 'Куплено',
+                price: item.boughtPrice ?? itemTotal(item),
+              }),
+            ),
+          ),
         ),
       ),
     );
@@ -621,7 +649,9 @@ function boughtContent() {
         },
         `${state.showDropped ? 'Скрыть' : 'Показать'} отменённые (${dropped.length})`,
       ),
-      state.showDropped ? h('div', { class: 'cards' }, dropped.map(card)) : null,
+      state.showDropped
+        ? h('div', { class: 'rows' }, dropped.map((item) => row(item, { when: 'Отменено', price: itemTotal(item) })))
+        : null,
     );
   }
   return content;
@@ -732,46 +762,6 @@ function planPicker({ current, onPick, confirmDay = false }) {
       'Пока не знаем — просто в план',
     ),
   );
-}
-
-function openWhenSheet(item) {
-  haptic.tap();
-  const sheet = openSheet({
-    title: item.planned ? 'Изменить дату' : 'Когда покупаем?',
-    render: () => [
-      h('p', { class: 'sheet-subtitle' }, item.title),
-      planPicker({
-        current: item,
-        confirmDay: true,
-        onPick: async (value) => {
-          try {
-            await save(item.id, { planned: true, ...value }, 'Запланировано');
-            sheet.close();
-          } catch {
-            // toast already shown
-          }
-        },
-      }),
-      item.planned
-        ? h(
-            'button',
-            {
-              type: 'button',
-              class: 'button ghost danger block',
-              onclick: async () => {
-                try {
-                  await save(item.id, { planned: false }, 'Убрано из плана');
-                  sheet.close();
-                } catch {
-                  // toast already shown
-                }
-              },
-            },
-            'Больше не планируем',
-          )
-        : null,
-    ],
-  });
 }
 
 function planSection(item, sheet) {
