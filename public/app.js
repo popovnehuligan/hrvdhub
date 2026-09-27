@@ -18,9 +18,15 @@ import {
   plural,
   sumTotals,
 } from './lib/shared.js';
+import { createApi } from './api.js';
 
 const tg = window.Telegram?.WebApp;
 const initData = tg?.initData || new URLSearchParams(location.hash.slice(1)).get('tgWebAppData') || '';
+const API = createApi({
+  url: window.WISHLIST_CONFIG?.API || '',
+  initData,
+  telegramUser: tg?.initDataUnsafe?.user,
+});
 const today = () => localToday();
 
 const state = {
@@ -71,31 +77,6 @@ const stop = (handler) => (event) => {
   event.stopPropagation();
   handler(event);
 };
-
-async function api(path, { method = 'GET', body, raw, contentType } = {}) {
-  const headers = { Authorization: `tma ${initData}` };
-  let payload;
-  if (raw) {
-    payload = raw;
-    headers['Content-Type'] = contentType;
-  } else if (body !== undefined) {
-    payload = JSON.stringify(body);
-    headers['Content-Type'] = 'application/json';
-  }
-  let response;
-  try {
-    response = await fetch(path, { method, headers, body: payload });
-  } catch {
-    throw new Error('Нет соединения. Проверьте интернет и попробуйте ещё раз.');
-  }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || `Что-то пошло не так (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
-  return data;
-}
 
 const haptic = {
   tap: () => tg?.HapticFeedback?.impactOccurred?.('light'),
@@ -202,7 +183,7 @@ function upsert(item) {
 
 async function save(id, patch, message) {
   try {
-    const { item } = await api(`/api/items/${id}`, { method: 'PATCH', body: patch });
+    const { item } = await API.update(id, patch);
     upsert(item);
     haptic.success();
     if (message) toast(message);
@@ -221,7 +202,7 @@ async function toggleVote(item) {
   item.votes += item.voted ? 1 : -1;
   refreshAll();
   try {
-    const { item: updated } = await api(`/api/items/${item.id}/vote`, { method: 'POST' });
+    const { item: updated } = await API.vote(item.id);
     upsert(updated);
   } catch (error) {
     Object.assign(item, before);
@@ -232,7 +213,7 @@ async function toggleVote(item) {
 
 async function reload() {
   try {
-    const { items } = await api('/api/items');
+    const { items } = await API.list();
     state.items = items;
     refreshAll();
   } catch {
@@ -244,13 +225,19 @@ async function reload() {
 // Pieces used in several places
 // ---------------------------------------------------------------------------
 
+/** If Google's picture address fails, try Drive's other public address once. */
+function driveFallback(event) {
+  const match = /lh3\.googleusercontent\.com\/d\/([\w-]+)/.exec(event.target.src);
+  if (match) event.target.src = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1000`;
+}
+
 function thumb(item, { hero = false } = {}) {
   const base = hero ? 'hero' : 'thumb';
   if (item.imageUrl) {
     return h(
       'div',
       { class: `${base}${item.imageSource === 'upload' ? ' cover' : ''}` },
-      h('img', { src: item.imageUrl, alt: '', loading: 'lazy', decoding: 'async' }),
+      h('img', { src: item.imageUrl, alt: '', loading: 'lazy', decoding: 'async', onerror: driveFallback }),
     );
   }
   return h(
@@ -410,6 +397,7 @@ function header() {
       h('span', { class: 'kicker' }, 'HOROVOD · Хаб'),
     ),
     h('h1', {}, 'Вишлист'),
+    API.demo ? h('p', { class: 'demo-note' }, 'Демо-режим: пример данных, изменения видны только на этом устройстве') : null,
     h(
       'p',
       { class: 'top-sub' },
@@ -974,7 +962,7 @@ function deleteButton(item, sheet) {
       onclick: async () => {
         if (!(await confirmAction('Удалить это желание навсегда?'))) return;
         try {
-          await api(`/api/items/${item.id}`, { method: 'DELETE' });
+          await API.remove(item.id);
           state.items = state.items.filter((candidate) => candidate.id !== item.id);
           sheet.close();
           refreshAll();
@@ -1045,24 +1033,30 @@ function moneyInput(input) {
 // Add / edit form
 // ---------------------------------------------------------------------------
 
-/** Shrinks big phone photos before uploading. Falls back to the original file. */
-async function shrinkImage(file, maxSide = 1600) {
+/** Shrinks a phone photo to at most 1280px and returns it as a JPEG data URL for upload. */
+async function shrinkImage(file, maxSide = 1280) {
+  let source;
   try {
-    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bitmap.width * scale);
-    canvas.height = Math.round(bitmap.height * scale);
-    const context = canvas.getContext('2d');
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.86));
-    if (blob) return blob;
+    source = await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch {
-    // Unsupported format in this browser: let the server decide.
+    source = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Не получилось открыть фото. Попробуйте JPG или PNG.'));
+      img.src = URL.createObjectURL(file);
+    });
   }
-  return file;
+  const width = source.width;
+  const height = source.height;
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 
 const looksLikeLink = (value) => /^(https?:\/\/)?[^\s/]+\.[^\s/]{2,}(\/\S*)?$/i.test(value);
@@ -1187,7 +1181,7 @@ function openForm(existing) {
     setHint('Смотрим ссылку…', 'loading');
     drawImage();
     try {
-      const preview = await api(`/api/preview?url=${encodeURIComponent(value)}`);
+      const preview = await API.preview(value);
       if (seq !== lookupSeq) return;
       const found = [];
       if (preview.image && form.imageSource !== 'upload') {
@@ -1249,12 +1243,7 @@ function openForm(existing) {
     drawImage();
     validate();
     try {
-      const blob = await shrinkImage(file);
-      const result = await api('/api/uploads', {
-        method: 'POST',
-        raw: blob,
-        contentType: blob.type || 'application/octet-stream',
-      });
+      const result = await API.upload(await shrinkImage(file));
       Object.assign(form, { image: result.image, imageUrl: result.imageUrl, imageSource: 'upload' });
       haptic.success();
     } catch (error) {
@@ -1362,10 +1351,7 @@ function openForm(existing) {
       Object.assign(body, { planned: form.planned, plannedDate: form.plannedDate, plannedPrecision: form.plannedPrecision });
     }
     try {
-      const { item } = await api(existing ? `/api/items/${existing.id}` : '/api/items', {
-        method: existing ? 'PATCH' : 'POST',
-        body,
-      });
+      const { item } = existing ? await API.update(existing.id, body) : await API.create(body);
       if (!existing && state.tab === 'bought') state.tab = 'wishlist';
       upsert(item);
       haptic.success();
@@ -1444,7 +1430,7 @@ async function boot() {
   }
   render();
 
-  if (!initData) {
+  if (!initData && !API.demo) {
     state.error = {
       emoji: '📱',
       title: 'Откройте в Telegram',
@@ -1455,7 +1441,7 @@ async function boot() {
   }
 
   try {
-    const [me, { items }] = await Promise.all([api('/api/me'), api('/api/items')]);
+    const { me, items } = await API.list();
     state.me = me;
     state.items = items;
     state.loaded = true;

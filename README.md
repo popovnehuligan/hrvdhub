@@ -35,86 +35,76 @@ bot, inside Telegram. The app and the bot's messages are in Russian.
 - Bot commands: `/wishlist` opens the app, `/plan` lists the purchase plan, and `/chatid` shows a
   chat's ID (for setup).
 
+## How it runs (same as the bar bot)
+
+No server to rent, like [horovodart/hrvdbarbot](https://github.com/horovodart/hrvdbarbot):
+
+| Part | Where |
+|---|---|
+| The screens (`public/`) | **GitHub Pages**, free: `https://popovnehuligan.github.io/hrvdhub/` |
+| The data | a **Google Sheet** «HOROVOD · Вишлист» on horovod.info@gmail.com (sheet `wishes`) |
+| The logic behind it (`apps-script/`) | **Google Apps Script** attached to that sheet: checks Telegram logins, saves wishes, fetches pictures from shop links, posts to the group, sends the morning reminder |
+| Photos | a Google Drive folder «HOROVOD Вишлист — фото» |
+| The address of the script | `public/config.js` |
+
+Until `public/config.js` has the script's address, the app runs in **demo mode**: it shows a sample
+wishlist and keeps changes only on that device. Useful for looking around; the team needs the live mode.
+
 ## Setting it up
 
-### 1. Host it somewhere with HTTPS
+You need: a **new bot** from @BotFather for the wishlist (not the bar bot's or Podmoga's), and the
+horovod.info@gmail.com Google account.
 
-Telegram only opens Mini Apps from an `https://` address, so the app needs a server. The simplest
-option is any small Linux server (VPS) with Docker, and a subdomain like `wishlist.horovod.sk`
-pointing at it:
+1. **GitHub Pages.** Repository Settings → Pages → Source: **GitHub Actions**. Merge this work into
+   `main`; the app is published at `https://popovnehuligan.github.io/hrvdhub/` a minute later.
+2. **Google side, automatically** (on a computer with Node.js, like the bar bot's `deploy.sh`):
+   ```sh
+   npx @google/clasp login      # once, sign in as horovod.info@gmail.com
+   tools/deploy.sh
+   ```
+   The first run creates the Google Sheet with its script, publishes the script as a web app, writes
+   its address into `public/config.js` and pushes to `main`.
+3. **Properties.** In the sheet: Extensions → Apps Script → Project Settings → Script Properties:
+   - `BOT_TOKEN`: the wishlist bot's token;
+   - `APP_URL`: `https://popovnehuligan.github.io/hrvdhub/`.
+4. **Group.** Add the bot to the HOROVOD group and write any message there.
+5. **setup().** In the Apps Script editor pick the function `setup` → Run → allow the access Google
+   asks for. It finds the group, puts the «Вишлист» button on the bot and turns on the morning
+   reminder. The log shows what it did.
+6. Optional, for the «Открыть в вишлисте» buttons in group posts: BotFather → the bot → Bot Settings →
+   Configure Mini App → Enable, with the same address.
 
-```sh
-git clone https://github.com/popovnehuligan/hrvdhub.git && cd hrvdhub
-cp .env.example .env        # then fill in BOT_TOKEN, PUBLIC_URL and DOMAIN
-docker compose up -d --build
-```
+Without step 2's script you can do the same by hand, as in the bar bot's README: create the sheet,
+paste `apps-script/Code.gs`, `apps-script/Shared.gs` and `appsscript.json` into its Apps Script,
+Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), and put the `…/exec`
+address into `public/config.js`.
 
-`docker-compose.yml` runs the app plus [Caddy](https://caddyserver.com), which gets and renews
-the HTTPS certificate automatically.
+### Script properties
 
-You can run it without Docker too. Any host with **Node.js 20.12+** works: run `npm start` behind
-an HTTPS proxy. There are no dependencies to install.
-
-All the data lives in one folder (`data/`, or the `wishlist_data` Docker volume): `wishlist.json`
-plus the photos in `uploads/`. The app keeps a daily copy of `wishlist.json` in `data/backups/`
-(the last 30 days). Back up that folder and you have everything.
-
-### 2. Connect the bot
-
-1. In **@BotFather**: `/mybots` → your bot → **Bot Settings** → **Configure Mini App** →
-   **Enable Mini App**, and send your `PUBLIC_URL`. This adds the *Open* button to the bot's
-   profile and makes the buttons in group messages open the app.
-2. Add the bot to the HOROVOD group and send `/chatid` there. Put that number (it looks like
-   `-1001234567890`) in `GROUP_CHAT_ID` in `.env`.
-3. Restart the app with `docker compose up -d`. The bot sets up its menu button and commands by
-   itself.
-
-Now anyone in the group can open the wishlist from the bot's **Wishlist** menu button, or from
-the buttons on the bot's group messages.
-
-### Settings (`.env`)
-
-| Setting | What it's for |
+| Property | What it's for |
 | --- | --- |
-| `BOT_TOKEN` | **Required.** The token from @BotFather. Keep it secret: it lives only in `.env`, which is never committed. |
-| `PUBLIC_URL` | The app's https address, e.g. `https://wishlist.horovod.sk`. |
-| `DOMAIN` | The same domain without `https://`. Only used by Caddy in docker-compose. |
-| `GROUP_CHAT_ID` | The HOROVOD group. Its members can use the app and its admins are app admins. |
-| `ADMIN_IDS`, `ALLOWED_USER_IDS` | Optional extra admins / members by Telegram user ID (comma separated). Send `/chatid` to the bot privately to see your ID. |
-| `NOTIFY_CHAT_ID` | Optional: post news and reminders to another chat instead of the group. |
-| `APP_LINK` | Optional: the link used on group-message buttons if you registered the app with `/newapp`, e.g. `https://t.me/horovod_bot/wishlist`. |
-| `CURRENCY` | Default `EUR`. |
-| `TIMEZONE`, `REMINDER_HOUR` | When the daily reminder goes out. Default: 10:00 `Europe/Bratislava`. |
-
-If neither `GROUP_CHAT_ID` nor `ALLOWED_USER_IDS` is set, anyone who opens the bot can use the
-app, and everyone is an admin unless `ADMIN_IDS` is set. That's handy for trying it out; set
-`GROUP_CHAT_ID` before sharing it.
+| `BOT_TOKEN` | **Required.** Lives only in the script's properties, never in the app or in git. |
+| `GROUP_CHAT_ID` | The HOROVOD group: its members can use the app, its admins are app admins. `setup()` fills it in. |
+| `ADMIN_IDS` | Extra admins by Telegram id, comma separated. |
+| `APP_URL` | The GitHub Pages address, for the bot's menu button. |
+| `NOTIFY_CHAT_ID` | Post news and reminders to another chat than the group. |
+| `CURRENCY`, `REMINDER_HOUR` | Default `EUR` and 10 (Bratislava time). |
 
 ## Development
 
 ```sh
-npm test                             # run the tests
-cp .env.example .env                 # add BOT_TOKEN
-npm run dev                          # start with auto-reload on http://localhost:3000
-npm run dev-link -- <your user id>   # prints a link that opens the app in a normal browser as you
-npm run demo                         # sample wishlist in data-demo/; then DATA_DIR=data-demo npm start
+npm test                    # tests: shared rules, and the Apps Script run against a pretend Google
+node tools/build-gs.mjs     # after changing public/lib/shared.js: regenerates apps-script/Shared.gs
+cd public && python3 -m http.server 8000   # look at the app locally (demo mode)
 ```
 
-The project has no dependencies and no build step:
-
-- `src/`: the server. `server.js` has the web API, `bot.js` the Telegram bot, `preview.js` reads
-  pictures and prices from shop links, `auth.js` checks Telegram logins and group membership,
-  and `store.js` saves the data.
-- `public/`: the Mini App. `app.js` has the screens and `styles.css` the calm HOROVOD look (Manrope,
-  cream, charcoal and ochre from the 2026 sponsorship booklet) in light and dark.
-  `public/brand/` holds the eye logo and the Manrope font (SIL Open Font License).
-- `public/lib/shared.js`: date, price and plan logic used by both the app and the bot.
-
-Security notes:
-- Every request is checked against Telegram's signed login data, and group membership is checked
-  with Telegram.
-- Link previews only fetch public internet addresses, never the server's own network.
-- Uploads must be real JPG/PNG/WebP/GIF/AVIF images.
+- `public/`: the Mini App. `app.js` the screens, `api.js` the data layer (Apps Script or demo),
+  `styles.css` the HOROVOD look (Manrope, cream, charcoal and ochre from the 2026 sponsorship booklet),
+  `demo/` the sample wishlist, `brand/` the eye logo and the Manrope font (SIL Open Font License).
+- `public/lib/shared.js`: the wish rules, dates and money, used by both the app and Apps Script.
+- `apps-script/`: the Google side. `Shared.gs` is generated, edit `shared.js` instead.
+- `src/`, `test/api|auth|bot|preview.test.js`, `scripts/`: the earlier own-server version (Node.js),
+  no longer used by the app. Kept until you decide to remove it.
 
 ## Ideas for later
 

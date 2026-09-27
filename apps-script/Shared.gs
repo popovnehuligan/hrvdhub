@@ -1,23 +1,25 @@
+// GENERATED from public/lib/shared.js by tools/build-gs.mjs — edit that file, not this one.
+
 // Pure helpers shared by the Mini App (screens, demo mode) and the Google Apps Script
 // backend (tools/build-gs.mjs copies this file to apps-script/Shared.gs without the
 // `export` keywords). So: no DOM, no Node, no Intl or URL — plain JavaScript only.
 
-export const CATEGORIES = [
+const CATEGORIES = [
   { id: 'hub', emoji: '🏠', label: 'Хаб' },
   { id: 'instruments', emoji: '🎸', label: 'Инструменты' },
   { id: 'tech', emoji: '🎛️', label: 'Техника и звук' },
   { id: 'other', emoji: '📦', label: 'Другое' },
 ];
 
-export const PRIORITIES = [
+const PRIORITIES = [
   { id: 'must', emoji: '🔴', label: 'Обязательно', rank: 0 },
   { id: 'nice', emoji: '🟡', label: 'Желательно', rank: 1 },
   { id: 'dream', emoji: '✨', label: 'Мечта', rank: 2 },
 ];
 
-export const STATUSES = ['wanted', 'bought', 'dropped'];
+const STATUSES = ['wanted', 'bought', 'dropped'];
 
-export const SORTS = [
+const SORTS = [
   { id: 'schedule', label: 'По дате' },
   { id: 'votes', label: 'По голосам' },
   { id: 'priority', label: 'По важности' },
@@ -26,7 +28,7 @@ export const SORTS = [
 ];
 
 /** Russian plural: plural(5, 'день', 'дня', 'дней') → 'дней'. */
-export function plural(n, one, few, many) {
+function plural(n, one, few, many) {
   const abs = Math.abs(n) % 100;
   const last = abs % 10;
   if (abs > 10 && abs < 20) return many;
@@ -35,7 +37,7 @@ export function plural(n, one, few, many) {
   return many;
 }
 
-export function findOption(list, id) {
+function findOption(list, id) {
   return list.find((option) => option.id === id) || list[list.length - 1];
 }
 
@@ -43,7 +45,7 @@ const NBSP = '\u00a0';
 const SYMBOLS = { EUR: '€', USD: '$', GBP: '£', CZK: 'Kč' };
 
 /** Russian style: "1 299 €", "12,50 €". */
-export function formatMoney(amount, currency = 'EUR') {
+function formatMoney(amount, currency = 'EUR') {
   if (amount == null || !Number.isFinite(amount)) return '';
   const digits = Number.isInteger(amount) ? 0 : 2;
   const [whole, fraction] = Math.abs(amount).toFixed(digits).split('.');
@@ -53,12 +55,12 @@ export function formatMoney(amount, currency = 'EUR') {
 }
 
 /** Price × quantity, or null when the item has no price. */
-export function itemTotal(item) {
+function itemTotal(item) {
   if (item.price == null) return null;
   return Math.round(item.price * (item.quantity || 1) * 100) / 100;
 }
 
-export function sumTotals(items, pick = itemTotal) {
+function sumTotals(items, pick = itemTotal) {
   let total = 0;
   let missing = 0;
   for (const item of items) {
@@ -74,7 +76,7 @@ export function sumTotals(items, pick = itemTotal) {
 // so "today" is always passed in by the caller.
 // ---------------------------------------------------------------------------
 
-export function isValidDate(value) {
+function isValidDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
@@ -84,7 +86,7 @@ const toUTC = (date) => Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date
 const fromUTC = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 /** Today's date in the given IANA time zone, e.g. todayIn('Europe/Bratislava'). */
-export function todayIn(timeZone) {
+function todayIn(timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
@@ -96,25 +98,25 @@ export function todayIn(timeZone) {
 }
 
 /** Today's date on this device. */
-export function localToday() {
+function localToday() {
   const now = new Date();
   return fromUTC(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
-export function daysBetween(from, to) {
+function daysBetween(from, to) {
   return Math.round((toUTC(to) - toUTC(from)) / 86_400_000);
 }
 
-export function monthsBetween(from, to) {
+function monthsBetween(from, to) {
   return (+to.slice(0, 4) - +from.slice(0, 4)) * 12 + (+to.slice(5, 7) - +from.slice(5, 7));
 }
 
 /** First day of the month `n` months after `date`'s month. */
-export function addMonths(date, n) {
+function addMonths(date, n) {
   return fromUTC(Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1 + n, 1));
 }
 
-export function addDays(date, n) {
+function addDays(date, n) {
   return fromUTC(toUTC(date) + n * 86_400_000);
 }
 
@@ -126,22 +128,22 @@ const monthIndex = (date) => +date.slice(5, 7) - 1;
 const yearSuffix = (date, today) => (!today || date.slice(0, 4) === today.slice(0, 4) ? '' : ` ${date.slice(0, 4)}`);
 
 /** "Октябрь 2026" */
-export function formatMonth(date) {
+function formatMonth(date) {
   return `${MONTHS[monthIndex(date)]} ${date.slice(0, 4)}`;
 }
 
 /** "Окт", or "Янв 2027" when the year differs from `today`'s. */
-export function formatShortMonth(date, today) {
+function formatShortMonth(date, today) {
   return MONTHS_CHIP[monthIndex(date)] + yearSuffix(date, today);
 }
 
 /** "12 окт" (with the year when it differs from `today`'s). Used where space is tight. */
-export function formatShortDay(date, today) {
+function formatShortDay(date, today) {
   return `${+date.slice(8, 10)} ${MONTHS_SHORT[monthIndex(date)]}${yearSuffix(date, today)}`;
 }
 
 /** "сб, 12 окт", with the year added when it differs from `today`'s. */
-export function formatDay(date, today) {
+function formatDay(date, today) {
   const weekday = WEEKDAYS[new Date(toUTC(date)).getUTCDay()];
   return `${weekday}, ${+date.slice(8, 10)} ${MONTHS_SHORT[monthIndex(date)]}${yearSuffix(date, today)}`;
 }
@@ -154,7 +156,7 @@ export function formatDay(date, today) {
  *   detail — the absolute part, e.g. "сб, 12 окт", "Ноябрь 2026"
  *   short  — a compact absolute part for cards, e.g. "12 окт", "Ноябрь"
  */
-export function describePlan(item, today) {
+function describePlan(item, today) {
   if (!item.planned) return null;
   if (!item.plannedDate) return { tone: 'nodate', label: 'В плане', detail: 'дата не выбрана', short: 'без даты' };
   const plan = describeDate(item, today);
@@ -204,7 +206,7 @@ const priorityRank = (item) => findOption(PRIORITIES, item.priority).rank;
 // Plain code-point comparison (localeCompare would put '~' before digits).
 const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-export function compareItems(sort) {
+function compareItems(sort) {
   const newest = (a, b) => compareText(b.createdAt || '', a.createdAt || '');
   const byVotes = (a, b) => (b.votes || 0) - (a.votes || 0);
   const byPriority = (a, b) => priorityRank(a) - priorityRank(b);
@@ -230,7 +232,7 @@ export function compareItems(sort) {
  * Planned (still wanted) items grouped for the plan view:
  * overdue first, then one group per month, then planned-without-a-date.
  */
-export function groupPlan(items, today) {
+function groupPlan(items, today) {
   const planned = items
     .filter((item) => item.status === 'wanted' && item.planned)
     .sort(compareItems('schedule'));
@@ -261,7 +263,7 @@ export function groupPlan(items, today) {
 }
 
 /** Bought items grouped by the month they were bought in, newest first. */
-export function groupBought(items) {
+function groupBought(items) {
   const bought = items
     .filter((item) => item.status === 'bought')
     .sort((a, b) => compareText(b.boughtAt || '', a.boughtAt || ''));
@@ -279,7 +281,7 @@ export function groupBought(items) {
   }));
 }
 
-export function hostOf(link) {
+function hostOf(link) {
   const match = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?([^/?#:]+)/i.exec(link || '');
   return match ? match[1].toLowerCase().replace(/^www\./, '') : '';
 }
@@ -289,7 +291,7 @@ export function hostOf(link) {
 // Apps Script backend (the real rules) and by demo mode in the browser.
 // ---------------------------------------------------------------------------
 
-export class WishError extends Error {
+class WishError extends Error {
   constructor(message, status = 400) {
     super(message);
     this.status = status;
@@ -320,7 +322,7 @@ function oneOf(value, options, label) {
 }
 
 /** Accepts "thomann.de/…" as well as full links; returns '' for empty input. */
-export function normalizeLink(value) {
+function normalizeLink(value) {
   let link = text(value, 'Ссылка', 2000);
   if (!link) return '';
   if (!/^[a-z][a-z0-9+.-]*:/i.test(link)) link = `https://${link}`;
@@ -337,7 +339,7 @@ const IMAGE_REF = /^(drive:[\w-]{10,200}|https:\/\/\S{1,2000}|demo\/img\/[\w-]+\
  * Turns input into a clean patch. Only fields present in the input are touched.
  * Planning and buying are for admins only.
  */
-export function cleanWishInput(input, { isAdmin, isNew, today }) {
+function cleanWishInput(input, { isAdmin, isNew, today }) {
   const patch = {};
   if (isNew || has(input, 'title')) patch.title = text(input.title, 'Название', 200, true);
   if (has(input, 'note')) patch.note = text(input.note, 'Заметка', 2000);
@@ -382,16 +384,16 @@ export function cleanWishInput(input, { isAdmin, isNew, today }) {
   return patch;
 }
 
-export function userRef(user) {
+function userRef(user) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
   return { id: user.id, name: name || (user.username ? `@${user.username}` : 'Кто-то'), username: user.username || null };
 }
 
-export function newWishId() {
+function newWishId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-export function newWish(patch, { user, currency, now = new Date().toISOString() }) {
+function newWish(patch, { user, currency, now = new Date().toISOString() }) {
   return {
     id: newWishId(),
     title: '',
@@ -420,12 +422,12 @@ export function newWish(patch, { user, currency, now = new Date().toISOString() 
 }
 
 /** Members may edit and delete their own wishes until they're bought; admins anything. */
-export function canEditWish(wish, { userId, isAdmin }) {
+function canEditWish(wish, { userId, isAdmin }) {
   return isAdmin || (wish.createdBy && wish.createdBy.id === userId && wish.status === 'wanted');
 }
 
 /** Applies an edit, enforcing "a photo or a link". Returns { wish, becamePlanned, becameBought }. */
-export function applyWishPatch(wish, patch, now = new Date().toISOString()) {
+function applyWishPatch(wish, patch, now = new Date().toISOString()) {
   const next = { ...wish, ...patch, updatedAt: now };
   if (!next.link && !next.image) throw new WishError('Добавьте фото или ссылку');
   return {
@@ -435,14 +437,14 @@ export function applyWishPatch(wish, patch, now = new Date().toISOString()) {
   };
 }
 
-export function toggleVote(wish, user) {
+function toggleVote(wish, user) {
   const votes = wish.votes.filter((vote) => vote.id !== user.id);
   if (votes.length === wish.votes.length) votes.push({ id: user.id, name: userRef(user).name });
   return { ...wish, votes };
 }
 
 /** What the Mini App gets to see of a wish. `imageUrl` turns an image reference into an address. */
-export function publicWish(wish, userId, imageUrl) {
+function publicWish(wish, userId, imageUrl) {
   const { votes, remindedFor, ...rest } = wish;
   return {
     ...rest,
@@ -455,7 +457,7 @@ export function publicWish(wish, userId, imageUrl) {
 }
 
 /** Planned wishes whose date has come: exact days within 2 days (or past), month plans once the month starts. */
-export function isDue(wish, today) {
+function isDue(wish, today) {
   if (wish.status !== 'wanted' || !wish.planned || !wish.plannedDate) return false;
   if (wish.plannedPrecision === 'month') return monthsBetween(today, wish.plannedDate) <= 0;
   return daysBetween(today, wish.plannedDate) <= 2;

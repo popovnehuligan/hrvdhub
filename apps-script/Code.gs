@@ -1,0 +1,678 @@
+/**
+ * HOROVOD · Вишлист — the backend, running as a Google Apps Script web app on top of
+ * a Google Sheet (same setup as the bar bot, horovodart/hrvdbarbot).
+ *
+ * Script properties (Project Settings → Script Properties):
+ *   BOT_TOKEN      — the wishlist bot's token from BotFather. Required. Never goes to the app or to git.
+ *   GROUP_CHAT_ID  — the HOROVOD Telegram group. Its members can use the app, its admins are app admins.
+ *                    setup() fills it in by itself if the bot has been added to exactly one group.
+ *   ADMIN_IDS      — extra admins by Telegram id, comma separated (optional).
+ *   NOTIFY_CHAT_ID — post news somewhere else than the group (optional).
+ *   APP_URL        — the GitHub Pages address of the app; setup() puts it on the bot's menu button.
+ *   CURRENCY       — default EUR. REMINDER_HOUR — default 10.
+ *
+ * Shared.gs is generated from public/lib/shared.js (tools/build-gs.mjs): the wish rules,
+ * dates and money formatting are the same code in the app and here.
+ *
+ * Sheet «wishes»: one row per wish. The readable columns are for people looking at the
+ * sheet; the last column («data») holds the full wish as JSON and is what the app reads.
+ */
+
+var SHEET_NAME = 'wishes';
+var HEADER = ['id', 'Название', 'Категория', 'Важность', 'Цена', 'Кол-во', 'Статус', 'Когда', 'Голоса', 'Ссылка', 'Добавил', 'data'];
+var DATA_COL = HEADER.length;
+var MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+var USER_AGENTS = [
+  'TelegramBot (like TwitterBot)',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+];
+
+/* ---------------- entry points ---------------- */
+
+// GET: a liveness check only. Wishes are served on POST with a Telegram signature.
+function doGet() {
+  return respond(function () { return { alive: true, ts: new Date().toISOString() } });
+}
+
+function doPost(e) {
+  return respond(function () {
+    var body;
+    try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}') } catch (err) { throw new Error('Неверный запрос') }
+    var user = auth(body.initData);
+    return handle(String(body.action || ''), body.payload || {}, user);
+  });
+}
+
+function respond(fn) {
+  var out;
+  try { out = { ok: true, data: fn() } }
+  catch (err) { out = { ok: false, error: String((err && err.message) || err), status: (err && err.status) || 400 } }
+  // Non-ASCII as \uXXXX, so the answer doesn't depend on how the client guesses the encoding.
+  var json = JSON.stringify(out).replace(/[\u0080-￿]/g, function (c) {
+    return '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4);
+  });
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ---------------- access ---------------- */
+
+function fail(message, status) { throw new WishError(message, status || 400) }
+
+/** Checks Telegram's signature on initData. https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app */
+function auth(initData) {
+  var token = prop('BOT_TOKEN');
+  if (!token) fail('Вишлист ещё не настроен: нет BOT_TOKEN', 503);
+  if (!initData) fail('Откройте вишлист через Telegram', 401);
+
+  var fields = {}, hash = '';
+  String(initData).split('&').forEach(function (part) {
+    var eq = part.indexOf('=');
+    if (eq < 0) return;
+    var key = decodeURIComponent(part.slice(0, eq).replace(/\+/g, ' '));
+    var value = decodeURIComponent(part.slice(eq + 1).replace(/\+/g, ' '));
+    if (key === 'hash') hash = value; else fields[key] = value;
+  });
+  var check = Object.keys(fields).sort().map(function (k) { return k + '=' + fields[k] }).join('\n');
+  var secret = Utilities.computeHmacSha256Signature(Utilities.newBlob(token).getBytes(), Utilities.newBlob('WebAppData').getBytes());
+  var signature = Utilities.computeHmacSha256Signature(Utilities.newBlob(check).getBytes(), secret);
+  if (hex(signature) !== String(hash).toLowerCase()) fail('Подпись Telegram не сошлась. Откройте вишлист заново', 401);
+
+  var authAt = Number(fields.auth_date) * 1000;
+  if (!isFinite(authAt) || authAt < Date.now() - 24 * 3600 * 1000) fail('Сессия устарела, откройте вишлист заново', 401);
+
+  var user = JSON.parse(fields.user || '{}');
+  if (!user.id) fail('Откройте вишлист через Telegram', 401);
+  var rights = access(user.id);
+  if (!rights.allowed) fail('Этот вишлист только для участников HOROVOD (ваш id ' + user.id + ')', 403);
+  user.isAdmin = rights.admin;
+  return user;
+}
+
+function hex(bytes) {
+  return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2) }).join('');
+}
+
+function ids(value) {
+  return String(value || '').split(',').map(function (s) { return s.trim() }).filter(String);
+}
+
+/** Group members may use the app; group admins and ADMIN_IDS are admins. Cached for 10 minutes. */
+function access(userId) {
+  var id = String(userId);
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get('access:' + id);
+  if (cached) return JSON.parse(cached);
+
+  var result = { allowed: false, admin: false };
+  if (ids(prop('ADMIN_IDS')).indexOf(id) >= 0) result = { allowed: true, admin: true };
+  var group = prop('GROUP_CHAT_ID');
+  if (!result.admin && group) {
+    var member = tgTry('getChatMember', { chat_id: group, user_id: Number(id) });
+    if (member.ok) {
+      var status = member.result.status;
+      if (status === 'creator' || status === 'administrator') result = { allowed: true, admin: true };
+      else if (status === 'member' || (status === 'restricted' && member.result.is_member)) result = { allowed: true, admin: false };
+    } else if (member.error_code !== 400) {
+      fail('Не удалось проверить участие через Telegram. Попробуйте чуть позже', 503);
+    }
+  }
+  if (!group && !ids(prop('ADMIN_IDS')).length) fail('Вишлист ещё не настроен: запустите setup() в Apps Script', 503);
+  cache.put('access:' + id, JSON.stringify(result), result.allowed ? 600 : 60);
+  return result;
+}
+
+/* ---------------- actions ---------------- */
+
+function handle(action, p, user) {
+  var ctx = { userId: user.id, isAdmin: user.isAdmin };
+  if (action === 'list') {
+    return {
+      me: { user: userRef(user), isAdmin: user.isAdmin, currency: currency() },
+      items: readWishes().map(view(user))
+    };
+  }
+  if (action === 'preview') return preview(p.url);
+  if (action === 'upload') return upload(p.photo);
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    // The app retries when Google's answer gets lost; the same request id must not add a wish twice.
+    var rid = p.rid ? 'rid:' + String(p.rid).slice(0, 64) : null;
+    var cache = CacheService.getScriptCache();
+    if (rid && cache.get(rid)) {
+      var done = findWish(cache.get(rid));
+      return { item: done ? view(user)(done) : null };
+    }
+
+    if (action === 'create') {
+      var patch = checkImageRef(cleanWishInput(p.wish || {}, { isAdmin: ctx.isAdmin, isNew: true, today: today() }));
+      var wish = newWish(patch, { user: user, currency: currency() });
+      if (!wish.link && !wish.image) fail('Добавьте фото или ссылку');
+      if (wish.link && !wish.image) attachLinkImage(wish);
+      saveWish(wish);
+      if (rid) cache.put(rid, wish.id, 21600);
+      notify('added', wish);
+      return { item: view(user)(wish) };
+    }
+
+    var current = findWish(p.id);
+    if (!current) fail('Этого желания больше нет', 404);
+
+    if (action === 'vote') {
+      var voted = toggleVote(current, user);
+      saveWish(voted);
+      return { item: view(user)(voted) };
+    }
+    if (action === 'update') {
+      if (!canEditWish(current, ctx)) fail('Можно менять только свои желания', 403);
+      var changes = checkImageRef(cleanWishInput(p.patch || {}, { isAdmin: ctx.isAdmin, isNew: false, today: today() }));
+      var result = applyWishPatch(current, changes);
+      var next = result.wish;
+      if (next.link && !next.image && next.link !== current.link) attachLinkImage(next);
+      saveWish(next);
+      if (result.becamePlanned) notify('planned', next);
+      if (result.becameBought) notify('bought', next);
+      return { item: view(user)(next) };
+    }
+    if (action === 'delete') {
+      if (!canEditWish(current, ctx)) fail('Можно удалять только свои желания', 403);
+      removeWish(current.id);
+      return { ok: true };
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  fail('Неизвестное действие');
+}
+
+function view(user) {
+  return function (wish) { return publicWish(wish, user.id, imageUrl) };
+}
+
+/** Pictures are uploaded separately (upload); a wish only ever points at them. */
+function checkImageRef(patch) {
+  if (patch.image && /^data:/.test(patch.image)) fail('Сначала загрузите фото');
+  return patch;
+}
+
+/** 'drive:ID' → a public Google Drive picture address; anything else is already an address. */
+function imageUrl(ref) {
+  var match = /^drive:(.+)$/.exec(ref || '');
+  return match ? 'https://lh3.googleusercontent.com/d/' + match[1] + '=w1000' : ref;
+}
+
+/* ---------------- the sheet ---------------- */
+
+function book() {
+  var id = prop('SHEET_ID');
+  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActive();
+}
+
+function wishSheet() {
+  var spreadsheet = book();
+  var sheet = spreadsheet.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(SHEET_NAME);
+    sheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]);
+    sheet.setFrozenRows(1);
+    // Plain text everywhere, or Sheets turns "2026-10-01" into a date and "1,5" into a number.
+    sheet.getRange(1, 1, sheet.getMaxRows(), HEADER.length).setNumberFormat('@');
+  }
+  return sheet;
+}
+
+function readWishes() {
+  var sheet = wishSheet();
+  var count = sheet.getLastRow() - 1;
+  if (count < 1) return [];
+  return sheet.getRange(2, DATA_COL, count, 1).getValues()
+    .map(function (row) { try { return JSON.parse(row[0]) } catch (e) { return null } })
+    .filter(function (wish) { return wish && wish.id });
+}
+
+function findWish(id) {
+  if (!id) return null;
+  return readWishes().filter(function (wish) { return wish.id === String(id) })[0] || null;
+}
+
+function rowIndex(sheet, id) {
+  var count = sheet.getLastRow() - 1;
+  if (count < 1) return -1;
+  var column = sheet.getRange(2, 1, count, 1).getValues();
+  for (var i = 0; i < column.length; i++) if (String(column[i][0]) === id) return i + 2;
+  return -1;
+}
+
+function readableRow(wish) {
+  var category = findOption(CATEGORIES, wish.category);
+  var priority = findOption(PRIORITIES, wish.priority);
+  var status = { wanted: wish.planned ? 'В плане' : 'Желание', bought: 'Куплено', dropped: 'Отменено' }[wish.status];
+  var when = wish.status === 'bought' ? (wish.boughtAt || '') : wish.planned ? (wish.plannedDate || 'без даты') : '';
+  var total = itemTotal(wish);
+  return [
+    wish.id, wish.title, category.label, priority.label, total == null ? '' : formatMoney(total, wish.currency),
+    String(wish.quantity || 1), status, when, String(wish.votes.length), wish.link || '',
+    wish.createdBy ? wish.createdBy.name : '', JSON.stringify(wish)
+  ];
+}
+
+function saveWish(wish) {
+  var sheet = wishSheet();
+  var row = rowIndex(sheet, wish.id);
+  if (row < 0) sheet.appendRow(readableRow(wish));
+  else sheet.getRange(row, 1, 1, HEADER.length).setValues([readableRow(wish)]);
+}
+
+function removeWish(id) {
+  var sheet = wishSheet();
+  var row = rowIndex(sheet, id);
+  if (row > 0) sheet.deleteRow(row);
+}
+
+/* ---------------- photos (Google Drive) ---------------- */
+
+function photosFolder() {
+  var id = prop('PHOTOS_FOLDER_ID');
+  if (id) { try { return DriveApp.getFolderById(id) } catch (e) { /* deleted: make a new one */ } }
+  var folder = DriveApp.createFolder('HOROVOD Вишлист — фото');
+  setProp('PHOTOS_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+var IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+
+/** The picture format from its first bytes. SVG is never accepted. */
+function detectImageType(bytes) {
+  if (!bytes || bytes.length < 12) return null;
+  var b = function (i) { return bytes[i] & 0xff };
+  var ascii = function (from, to) { var s = ''; for (var i = from; i < to; i++) s += String.fromCharCode(b(i)); return s };
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return 'jpg';
+  if (b(0) === 0x89 && ascii(1, 4) === 'PNG') return 'png';
+  if (ascii(0, 4) === 'GIF8') return 'gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+function savePhoto(bytes, name) {
+  var type = detectImageType(bytes);
+  if (!type) fail('Нужна картинка JPG, PNG, WebP или GIF', 415);
+  if (bytes.length > MAX_PHOTO_BYTES) fail('Файл слишком большой', 413);
+  var file = photosFolder().createFile(Utilities.newBlob(bytes, IMAGE_TYPES[type], (name || 'photo') + '.' + type));
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return 'drive:' + file.getId();
+}
+
+/** photo — "data:image/jpeg;base64,…", already made smaller by the app. */
+function upload(photo) {
+  var match = /^data:image\/[\w+.-]+;base64,(.+)$/.exec(String(photo || ''));
+  if (!match) fail('Нужна картинка JPG, PNG, WebP или GIF', 415);
+  var image = savePhoto(Utilities.base64Decode(match[1]), 'upload-' + newWishId());
+  return { image: image, imageUrl: imageUrl(image) };
+}
+
+/* ---------------- link previews ---------------- */
+
+var ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeEntities(text) {
+  return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, function (match, code) {
+    if (code.charAt(0) === '#') {
+      var n = code.charAt(1).toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : match;
+    }
+    return ENTITIES[code.toLowerCase()] || match;
+  });
+}
+
+function parseAttributes(tag) {
+  var attrs = {};
+  var inner = tag.replace(/^<[\w-]+/, '').replace(/\/?>$/, '');
+  var re = /([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g, m;
+  while ((m = re.exec(inner))) {
+    var key = m[1].toLowerCase();
+    if (!(key in attrs)) attrs[key] = decodeEntities(m[2] != null ? m[2] : m[3] != null ? m[3] : m[4] != null ? m[4] : '');
+  }
+  return attrs;
+}
+
+/** "1 299,90 €" → 1299.9, "1,299.00" → 1299, "1.299" → 1299 */
+function parsePrice(value) {
+  if (typeof value === 'number') return isFinite(value) && value >= 0 ? value : null;
+  if (typeof value !== 'string') return null;
+  var digits = value.replace(/[^\d.,]/g, '');
+  if (!/\d/.test(digits)) return null;
+  var decimals = digits.match(/[.,](\d{1,2})$/);
+  var whole = (decimals ? digits.slice(0, -decimals[0].length) : digits).replace(/[.,]/g, '');
+  var number = Number((whole || '0') + (decimals ? '.' + decimals[1] : ''));
+  return isFinite(number) ? number : null;
+}
+
+function resolveUrl(base, ref) {
+  ref = String(ref || '').trim();
+  if (/^https?:\/\//i.test(ref)) return ref;
+  var origin = (/^(https?:\/\/[^\/?#]+)/i.exec(base) || [])[1];
+  if (!origin) return null;
+  if (ref.indexOf('//') === 0) return base.split(':')[0] + ':' + ref;
+  if (ref.charAt(0) === '/') return origin + ref;
+  var path = base.replace(/[?#].*$/, '');
+  return path.slice(0, path.lastIndexOf('/') + 1) + ref;
+}
+
+function findProducts(node, found, depth) {
+  if (!node || typeof node !== 'object' || depth > 8) return found;
+  if (Array.isArray(node)) { node.forEach(function (child) { findProducts(child, found, depth + 1) }); return found }
+  var types = [].concat(node['@type'] || []).map(String);
+  if (types.some(function (t) { return /^(Product|ProductGroup|IndividualProduct|ProductModel)$/i.test(t) })) found.push(node);
+  Object.keys(node).forEach(function (k) { if (node[k] && typeof node[k] === 'object') findProducts(node[k], found, depth + 1) });
+  return found;
+}
+
+/** Pulls the title, picture candidates and price out of a product page. */
+function parseHtmlMeta(html, pageUrl) {
+  var meta = {}, m;
+  var metaRe = /<meta\b[^>]*>/gi;
+  while ((m = metaRe.exec(html))) {
+    var a = parseAttributes(m[0]);
+    var key = (a.property || a.name || a.itemprop || '').toLowerCase();
+    if (key && a.content && !(key in meta)) meta[key] = a.content.trim();
+  }
+  var tagImages = [];
+  var tagRe = /<(?:link|img)\b[^>]*>/gi;
+  while ((m = tagRe.exec(html))) {
+    var t = parseAttributes(m[0]);
+    if ((t.rel || '').toLowerCase().split(/\s+/).indexOf('image_src') >= 0) tagImages.push(t.href);
+    else if ((t.itemprop || '').toLowerCase() === 'image') tagImages.push(t.href || t.src || t['data-src']);
+  }
+  var products = [];
+  var ldRe = /<script\b[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi;
+  while ((m = ldRe.exec(html))) { try { findProducts(JSON.parse(m[1].trim()), products, 0) } catch (e) { /* broken JSON-LD is common */ } }
+  var product = products[0] || {};
+
+  var offer = null;
+  [].concat(product.offers || []).some(function (o) {
+    if (!o || typeof o !== 'object') return false;
+    var spec = [].concat(o.priceSpecification || [])[0] || {};
+    var price = parsePrice(o.price != null ? o.price : o.lowPrice != null ? o.lowPrice : spec.price);
+    if (price == null) return false;
+    offer = { price: price, currency: o.priceCurrency || spec.priceCurrency || null };
+    return true;
+  });
+
+  var candidates = [meta['og:image:secure_url'], meta['og:image'], meta['og:image:url'], meta['twitter:image'], meta['twitter:image:src']]
+    .concat([].concat(product.image || []).map(function (x) { return typeof x === 'string' ? x : x && (x.url || x.contentUrl) }))
+    .concat(tagImages);
+  var images = [];
+  candidates.forEach(function (c) {
+    if (!c || typeof c !== 'string') return;
+    var url = resolveUrl(pageUrl, decodeEntities(c));
+    if (url && /^https?:\/\//i.test(url) && images.indexOf(url) < 0) images.push(url);
+  });
+
+  var clean = function (v, max) { return v ? decodeEntities(String(v)).replace(/\s+/g, ' ').trim().slice(0, max) : '' };
+  var titleTag = (/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html) || [])[1];
+  var metaPrice = parsePrice(meta['product:price:amount'] || meta['og:price:amount'] || meta.price);
+  return {
+    title: clean(meta['og:title'] || meta['twitter:title'] || product.name || titleTag, 200),
+    siteName: clean(meta['og:site_name'], 100),
+    images: images,
+    price: offer ? offer.price : metaPrice,
+    currency: clean((offer && offer.currency) || meta['product:price:currency'] || meta['og:price:currency'] || meta.pricecurrency, 3).toUpperCase() || null
+  };
+}
+
+function fetchUrl(url, userAgent, referer) {
+  var headers = { 'User-Agent': userAgent, 'Accept-Language': 'en,sk;q=0.8,cs;q=0.6' };
+  if (referer) headers.Referer = referer;
+  return UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, headers: headers });
+}
+
+/** Downloads a picture into the Drive folder. Returns 'drive:ID' or null. */
+function downloadImage(url, referer) {
+  try {
+    var response = fetchUrl(url, USER_AGENTS[1], referer);
+    if (response.getResponseCode() !== 200) return null;
+    var bytes = response.getContent();
+    if (bytes.length < 1024 || !detectImageType(bytes)) return null;
+    return savePhoto(bytes, 'link-' + newWishId());
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Opens a shop link: { title, siteName, price, currency, image } with the picture already in Drive. */
+function linkPreview(link) {
+  var page = null, lastError = null;
+  for (var i = 0; i < USER_AGENTS.length; i++) {
+    try {
+      var response = fetchUrl(link, USER_AGENTS[i]);
+      var code = response.getResponseCode();
+      if (code >= 400) { lastError = 'Магазин ответил ошибкой (' + code + ')'; continue }
+      var type = String(response.getHeaders()['Content-Type'] || response.getHeaders()['content-type'] || '');
+      if (type.indexOf('image/') === 0) { page = { title: '', siteName: '', images: [link], price: null, currency: null }; break }
+      page = parseHtmlMeta(response.getContentText(), link);
+      if (page.images.length) break;
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+  if (!page) throw new Error(lastError || 'Не удалось открыть ссылку');
+  var image = null;
+  for (var j = 0; j < Math.min(page.images.length, 4) && !image; j++) image = downloadImage(page.images[j], link);
+  return { title: page.title, siteName: page.siteName, price: page.price, currency: page.currency, image: image };
+}
+
+function preview(url) {
+  var link = normalizeLink(url || '');
+  if (!link) fail('Сначала вставьте ссылку');
+  try {
+    var p = linkPreview(link);
+    return { title: p.title, siteName: p.siteName, price: p.price, currency: p.currency, link: link,
+             image: p.image, imageUrl: p.image ? imageUrl(p.image) : null };
+  } catch (e) {
+    fail('Не получилось открыть ссылку. Её всё равно можно сохранить или добавить фото вручную', 422);
+  }
+}
+
+/** "If a link is added it should add an image there." */
+function attachLinkImage(wish) {
+  try {
+    var image = linkPreview(wish.link).image;
+    if (image) { wish.image = image; wish.imageSource = 'link' }
+  } catch (e) { /* the link alone is enough */ }
+}
+
+/* ---------------- Telegram ---------------- */
+
+function tgTry(method, payload) {
+  var token = prop('BOT_TOKEN');
+  var options = { method: 'post', muteHttpExceptions: true };
+  var multipart = Object.keys(payload).some(function (k) { return payload[k] && typeof payload[k].getBytes === 'function' });
+  if (multipart) {
+    var form = {};
+    Object.keys(payload).forEach(function (k) {
+      var v = payload[k];
+      if (v == null) return;
+      form[k] = typeof v === 'object' && typeof v.getBytes !== 'function' ? JSON.stringify(v) : v;
+    });
+    options.payload = form;
+  } else {
+    options.contentType = 'application/json';
+    options.payload = JSON.stringify(payload);
+  }
+  var response = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/' + method, options);
+  try { return JSON.parse(response.getContentText()) } catch (e) { return { ok: false, error_code: response.getResponseCode() } }
+}
+
+function tg(method, payload) {
+  var result = tgTry(method, payload);
+  if (!result.ok) throw new Error('Telegram ' + method + ': ' + (result.description || result.error_code));
+  return result.result;
+}
+
+var escapeHtml = function (text) { return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') };
+var shorten = function (text, max) { return text.length > max ? text.slice(0, max - 1) + '…' : text };
+
+function appLink(startParam) {
+  var base = prop('APP_LINK') || (prop('BOT_USERNAME') ? 'https://t.me/' + prop('BOT_USERNAME') : '');
+  if (!base) return null;
+  return base + '?startapp=' + encodeURIComponent(startParam);
+}
+
+function priceText(wish) {
+  var total = itemTotal(wish);
+  if (total == null) return '';
+  return wish.quantity > 1
+    ? formatMoney(total, wish.currency) + ' (' + wish.quantity + ' × ' + formatMoney(wish.price, wish.currency) + ')'
+    : formatMoney(total, wish.currency);
+}
+
+function planText(wish) {
+  var plan = describePlan(wish, today());
+  if (!plan) return '';
+  if (plan.tone === 'nodate') return 'дата пока не выбрана';
+  return plan.label.toLowerCase() + ' (' + plan.detail + ')';
+}
+
+function notifyChat() { return prop('NOTIFY_CHAT_ID') || prop('GROUP_CHAT_ID') }
+
+/** Posts to the group with the picture and a button that opens the wish. Never breaks the save. */
+function post(wish, text) {
+  var chat = notifyChat();
+  if (!chat) return;
+  var link = appLink('item_' + wish.id);
+  var params = { chat_id: chat, parse_mode: 'HTML' };
+  if (link) params.reply_markup = { inline_keyboard: [[{ text: 'Открыть в вишлисте', url: link }]] };
+  try {
+    var photo = null;
+    var drive = /^drive:(.+)$/.exec(wish.image || '');
+    if (drive) photo = DriveApp.getFileById(drive[1]).getBlob();
+    else if (/^https:\/\//.test(wish.image || '')) photo = wish.image;
+    if (photo) {
+      var sent = tgTry('sendPhoto', Object.assign({}, params, { photo: photo, caption: text }));
+      if (sent.ok) return;
+    }
+    tgTry('sendMessage', Object.assign({}, params, { text: text, link_preview_options: { is_disabled: true } }));
+  } catch (e) {
+    console.warn('Не удалось написать в группу: ' + e.message);
+  }
+}
+
+function notify(kind, wish) {
+  var lines;
+  if (kind === 'added') {
+    var category = findOption(CATEGORIES, wish.category), priority = findOption(PRIORITIES, wish.priority);
+    lines = ['<b>' + escapeHtml(wish.createdBy.name) + '</b> добавил(а) желание:', '<b>' + escapeHtml(wish.title) + '</b>',
+             category.label + ' · ' + priority.label];
+    if (priceText(wish)) lines.push('Цена: ' + priceText(wish));
+    if (wish.note) lines.push(escapeHtml(shorten(wish.note, 300)));
+    if (wish.planned) lines.push('В плане: ' + planText(wish));
+  } else if (kind === 'planned') {
+    lines = ['<b>Планируем купить</b>: ' + escapeHtml(wish.title), 'Когда: <b>' + planText(wish) + '</b>'];
+    if (priceText(wish)) lines.push('Цена: ' + priceText(wish));
+  } else {
+    var paid = wish.boughtPrice != null ? wish.boughtPrice : itemTotal(wish);
+    lines = ['<b>Куплено</b>: ' + escapeHtml(wish.title)];
+    if (paid != null) lines.push('Оплачено: ' + formatMoney(paid, wish.currency));
+  }
+  post(wish, lines.join('\n'));
+}
+
+/** Runs every morning (setup() installs the trigger): one message about purchases that are due. */
+function dailyReminders() {
+  var chat = notifyChat();
+  if (!chat) return;
+  var now = today();
+  var wishes = readWishes();
+  var due = wishes.filter(function (w) { return isDue(w, now) && w.remindedFor !== w.plannedDate });
+  if (!due.length) return;
+  var lines = ['<b>Скоро покупаем</b>'];
+  due.forEach(function (w) {
+    lines.push('• <b>' + escapeHtml(w.title) + '</b> — ' + planText(w) + (priceText(w) ? ' · ' + priceText(w) : ''));
+  });
+  var total = sumTotals(due).total;
+  if (total) lines.push('', 'Итого: <b>' + formatMoney(total, currency()) + '</b>');
+  var link = appLink('plan');
+  tg('sendMessage', { chat_id: chat, text: shorten(lines.join('\n'), 4000), parse_mode: 'HTML',
+                      reply_markup: link ? { inline_keyboard: [[{ text: 'Открыть план', url: link }]] } : undefined });
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    due.forEach(function (w) {
+      var fresh = findWish(w.id);
+      if (fresh) { fresh.remindedFor = fresh.plannedDate; saveWish(fresh) }
+    });
+  } finally { lock.releaseLock() }
+}
+
+/* ---------------- one-time setup ---------------- */
+
+/**
+ * Run once from the Apps Script editor after adding BOT_TOKEN (and again whenever you like):
+ * creates the sheet and the photo folder, finds the group, sets the bot's menu button and
+ * the morning reminder. Prints what it did.
+ */
+function setup() {
+  if (!prop('BOT_TOKEN')) throw new Error('Сначала добавьте BOT_TOKEN в Project Settings → Script Properties');
+  var report = [];
+  wishSheet();
+  report.push('Лист «' + SHEET_NAME + '» готов');
+  report.push('Папка для фото: ' + photosFolder().getName());
+
+  var me = tg('getMe', {});
+  setProp('BOT_USERNAME', me.username);
+  report.push('Бот: @' + me.username);
+
+  if (!prop('GROUP_CHAT_ID')) {
+    var groups = findGroups();
+    if (groups.length === 1) {
+      setProp('GROUP_CHAT_ID', groups[0].id);
+      report.push('Группа найдена: ' + groups[0].title + ' (' + groups[0].id + ')');
+    } else if (!groups.length) {
+      report.push('Группа не найдена: добавьте бота в группу HOROVOD, напишите там любое сообщение и запустите setup() ещё раз');
+    } else {
+      report.push('Бот состоит в нескольких группах, впишите нужную в GROUP_CHAT_ID: ' +
+                  groups.map(function (g) { return g.title + ' = ' + g.id }).join('; '));
+    }
+  } else {
+    report.push('Группа: ' + prop('GROUP_CHAT_ID'));
+  }
+
+  if (prop('APP_URL')) {
+    tg('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Вишлист', web_app: { url: prop('APP_URL') } } });
+    report.push('Кнопка «Вишлист» у бота ведёт на ' + prop('APP_URL'));
+  } else {
+    report.push('APP_URL не задан — кнопку меню у бота не трогаю');
+  }
+
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyReminders') ScriptApp.deleteTrigger(t);
+  });
+  var hour = Number(prop('REMINDER_HOUR') || 10);
+  ScriptApp.newTrigger('dailyReminders').timeBased().atHour(hour).everyDays(1).inTimezone(Session.getScriptTimeZone()).create();
+  report.push('Напоминания: каждый день около ' + hour + ':00');
+
+  report.forEach(function (line) { Logger.log(line) });
+  return report;
+}
+
+/** Groups the bot was added to, from its recent updates. */
+function findGroups() {
+  var updates = tgTry('getUpdates', { allowed_updates: ['message', 'my_chat_member'] });
+  var seen = {}, groups = [];
+  (updates.result || []).forEach(function (u) {
+    var chat = (u.message && u.message.chat) || (u.my_chat_member && u.my_chat_member.chat);
+    if (chat && (chat.type === 'group' || chat.type === 'supergroup') && !seen[chat.id]) {
+      seen[chat.id] = true;
+      groups.push({ id: String(chat.id), title: chat.title || '' });
+    }
+  });
+  return groups;
+}
+
+/* ---------------- small helpers ---------------- */
+
+function prop(key) { return PropertiesService.getScriptProperties().getProperty(key) }
+function setProp(key, value) { PropertiesService.getScriptProperties().setProperty(key, String(value)) }
+function currency() { return String(prop('CURRENCY') || 'EUR').toUpperCase() }
+function today() { return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') }

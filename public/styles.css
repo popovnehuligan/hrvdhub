@@ -199,6 +199,17 @@ p {
   margin: 14px 0 8px;
 }
 
+.demo-note {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(246, 242, 233, 0.1);
+  color: #d9a55e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .top-sub {
   font-size: 14px;
   font-weight: 600;
