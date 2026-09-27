@@ -252,11 +252,10 @@ function thumb(item, { hero = false } = {}) {
       h('img', { src: item.imageUrl, alt: '', loading: 'lazy', decoding: 'async' }),
     );
   }
-  const category = findOption(CATEGORIES, item.category);
   return h(
     'div',
-    { class: `${base} placeholder` },
-    h('span', { class: 'placeholder-emoji' }, category.emoji),
+    { class: `${base} placeholder cat-${item.category}` },
+    h('span', { class: 'eye placeholder-eye', 'aria-hidden': 'true' }),
     item.link ? h('span', { class: 'placeholder-host' }, hostOf(item.link)) : null,
   );
 }
@@ -267,9 +266,8 @@ function metaLine(item) {
   return h(
     'div',
     { class: 'meta' },
-    `${category.emoji} ${category.label}`,
-    h('span', { class: 'sep' }, '·'),
-    `${priority.emoji} ${priority.label}`,
+    h('span', { class: `tag cat-${category.id}` }, category.label),
+    h('span', { class: `prio prio-${priority.id}` }, priority.label),
   );
 }
 
@@ -332,7 +330,7 @@ function voteButton(item, { withLabel = false } = {}) {
       'aria-label': item.voted ? 'Remove your vote' : 'Vote for this',
       onclick: stop(() => toggleVote(item)),
     },
-    '👍',
+    h('span', { class: 'vote-plus' }, '+1'),
     withLabel ? h('span', {}, item.voted ? 'Voted' : 'Vote') : null,
     item.votes ? h('span', { class: 'vote-count' }, item.votes) : null,
   );
@@ -352,8 +350,8 @@ function card(item) {
     h(
       'div',
       { class: 'card-main' },
-      h('h3', { class: 'card-title' }, item.title),
       metaLine(item),
+      h('h3', { class: 'card-title' }, item.title),
       h('div', { class: 'price-row' }, priceLine(item), item.status === 'wanted' ? voteButton(item) : null),
       item.status === 'wanted'
         ? h('div', { class: 'card-foot' }, planChip(item))
@@ -368,11 +366,12 @@ function statusText(item) {
   return '';
 }
 
-function emptyState(emoji, title, text, action) {
+// The first argument used to be an emoji; every empty state now shows the HOROVOD eye.
+function emptyState(_icon, title, text, action) {
   return h(
     'div',
     { class: 'empty' },
-    h('div', { class: 'empty-emoji' }, emoji),
+    h('span', { class: 'eye empty-eye', 'aria-hidden': 'true' }),
     h('h3', {}, title),
     h('p', {}, text),
     action || null,
@@ -406,20 +405,24 @@ function header() {
   const wanted = state.items.filter((item) => item.status === 'wanted');
   const planned = wanted.filter((item) => item.planned);
   const { total } = sumTotals(planned);
+  const stat = (value, label, tone) =>
+    h('div', { class: 'stat' }, h('div', { class: `stat-value ${tone}` }, value), h('div', { class: 'stat-label' }, label));
   return h(
     'header',
     { class: 'top' },
-    h('div', { class: 'logo', 'aria-hidden': 'true' }, 'H'),
     h(
       'div',
-      {},
-      h('h1', {}, 'Horovod Wishlist'),
-      h(
-        'p',
-        { class: 'muted' },
-        `${wanted.length} ${wanted.length === 1 ? 'wish' : 'wishes'} · ${planned.length} planned`,
-        total ? ` · ${money(total)}` : '',
-      ),
+      { class: 'top-brand' },
+      h('span', { class: 'eye', 'aria-hidden': 'true' }),
+      h('span', { class: 'kicker' }, 'HOROVOD · Hub'),
+    ),
+    h('h1', {}, 'Wishlist'),
+    h(
+      'div',
+      { class: 'stats' },
+      stat(wanted.length, wanted.length === 1 ? 'wish' : 'wishes', 'yellow'),
+      stat(planned.length, 'planned', 'pink'),
+      stat(money(total) || money(0), 'to spend', 'green'),
     ),
   );
 }
@@ -499,7 +502,7 @@ function toolbar() {
           'button',
           {
             type: 'button',
-            class: `chip${state.category === category.id ? ' selected' : ''}`,
+            class: `chip cat-${category.id}${state.category === category.id ? ' selected' : ''}`,
             'aria-pressed': String(state.category === category.id),
             onclick: () => {
               state.category = category.id;
@@ -507,7 +510,7 @@ function toolbar() {
               render();
             },
           },
-          category.emoji ? `${category.emoji} ${category.label}` : category.label,
+          category.label,
         ),
       ),
     ),
@@ -1291,14 +1294,14 @@ function openForm(existing) {
               type: 'button',
               role: 'radio',
               'aria-checked': String(form[key] === option.id),
-              class: `chip${form[key] === option.id ? ' selected' : ''}`,
+              class: `chip ${key === 'category' ? 'cat' : 'prio'}-${option.id}${form[key] === option.id ? ' selected' : ''}`,
               onclick: () => {
                 form[key] = option.id;
                 haptic.tap();
                 draw();
               },
             },
-            `${option.emoji} ${option.label}`,
+            option.label,
           ),
         ),
       );
@@ -1441,11 +1444,11 @@ function openForm(existing) {
 
 function applyTheme() {
   if (!tg) return;
-  document.documentElement.dataset.scheme = tg.colorScheme === 'dark' ? 'dark' : 'light';
-  if (supports('6.1')) {
-    tg.setHeaderColor('secondary_bg_color');
-    tg.setBackgroundColor('secondary_bg_color');
-  }
+  const dark = tg.colorScheme === 'dark';
+  document.documentElement.dataset.scheme = dark ? 'dark' : 'light';
+  // Telegram's own bar blends into the charcoal HOROVOD header band.
+  if (supports('6.9')) tg.setHeaderColor(dark ? '#1f1d1b' : '#2d2a28');
+  if (supports('6.1')) tg.setBackgroundColor(dark ? '#2d2a28' : '#f6f2e9');
 }
 
 async function boot() {

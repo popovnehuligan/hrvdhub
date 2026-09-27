@@ -104,8 +104,9 @@ The project has no dependencies and no build step:
 - `src/`: the server. `server.js` has the web API, `bot.js` the Telegram bot, `preview.js` reads
   pictures and prices from shop links, `auth.js` checks Telegram logins and group membership,
   and `store.js` saves the data.
-- `public/`: the Mini App. `app.js` has the screens and `styles.css` follows the user's Telegram
-  theme, light or dark.
+- `public/`: the Mini App. `app.js` has the screens and `styles.css` the HOROVOD look (from the 2026
+  sponsorship booklet: Manrope, cream, charcoal, ochre and colour blocks) in light and dark.
+  `public/brand/` holds the eye logo and the Manrope font (SIL Open Font License).
 - `public/lib/shared.js`: date, price and plan logic used by both the app and the bot.
 
 Security notes:
