@@ -74,7 +74,10 @@ function doPost(e) {
 function respond(fn) {
   var out;
   try { out = { ok: true, data: fn() } }
-  catch (err) { out = { ok: false, error: String((err && err.message) || err), status: (err && err.status) || 400 } }
+  catch (err) {
+    out = { ok: false, error: String((err && err.message) || err), status: (err && err.status) || 400 };
+    if (err && err.code) { out.code = err.code; out.bot = err.bot }
+  }
   // Non-ASCII as \uXXXX, so the answer doesn't depend on how the client guesses the encoding.
   var json = JSON.stringify(out).replace(/[\u0080-￿]/g, function (c) {
     return '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4);
@@ -111,6 +114,12 @@ function auth(initData) {
   var user = JSON.parse(fields.user || '{}');
   if (!user.id) fail('Откройте вишлист через Telegram', 401);
   var rights = access(user.id);
+  if (!rights.allowed && rights.unknown) {
+    var meet = new WishError('Бот вас ещё не знает, поэтому не может проверить, что вы в группе HOROVOD.', 403);
+    meet.code = 'meet_bot';
+    meet.bot = prop('BOT_USERNAME') || '';
+    throw meet;
+  }
   if (!rights.allowed) fail('Этот вишлист только для участников HOROVOD (ваш id ' + user.id + ')', 403);
   user.isAdmin = rights.admin;
   return user;
@@ -173,11 +182,16 @@ function access(userId) {
       var status = member.result.status;
       var inGroup = status === 'creator' || status === 'administrator' || status === 'member' || (status === 'restricted' && member.result.is_member);
       if (inGroup) result = { allowed: true, admin: i === 0 && (status === 'creator' || status === 'administrator') };
+    } else if (member.error_code === 400 && /PARTICIPANT_ID_INVALID|user not found/i.test(member.description || '')) {
+      // Telegram lets a bot check only people it has met: someone who never wrote to the bot, or in
+      // the group while the bot was there, is "unknown". Pressing «Старт» in the bot's chat is enough.
+      result.unknown = true;
     } else if (member.error_code !== 400) {
       fail('Не удалось проверить участие через Telegram. Попробуйте чуть позже', 503);
     }
   }
   if (!group && !ids(prop('ADMIN_IDS')).length) fail('Вишлист ещё не настроен: запустите setup() в Apps Script', 503);
+  if (result.allowed) delete result.unknown;
   if (!result.allowed) {
     // For check-ups from outside (doGet): how many were turned away and why, never who.
     var denied = JSON.parse(prop('DENIED') || '{"count":0}');
@@ -186,7 +200,7 @@ function access(userId) {
     denied.reason = member ? (member.ok ? 'status ' + member.result.status : String(member.description || member.error_code)) : 'no group';
     setProp('DENIED', JSON.stringify(denied));
   }
-  cache.put('access:' + id, JSON.stringify(result), result.allowed ? 600 : 60);
+  if (!result.unknown) cache.put('access:' + id, JSON.stringify(result), result.allowed ? 600 : 60);
   return result;
 }
 

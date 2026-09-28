@@ -364,3 +364,17 @@ test('members of another group can come in once an admin adds the bot there', ()
   gas.cache.clear();
   assert.equal(gas.call('list', {}, five).status, 403);
 });
+
+test('someone the bot has never met is asked to press «Старт», and gets in right after', () => {
+  let met = false;
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'hrvd_wishlist_bot' },
+    tg: (method, params) => (method === 'getChatMember' && params.user_id === 8
+      ? (met ? { ok: true, result: { status: 'member' } } : { ok: false, error_code: 400, description: 'Bad Request: PARTICIPANT_ID_INVALID' })
+      : null) });
+  const newcomer = { id: 8, first_name: 'Даша' };
+  const first = gas.call('list', {}, newcomer);
+  assert.deepEqual([first.status, first.code, first.bot], [403, 'meet_bot', 'hrvd_wishlist_bot']);
+  met = true; // pressed «Старт»
+  assert.equal(gas.call('list', {}, newcomer).ok, true, 'not held back by a cached refusal');
+  assert.equal(gas.call('list', {}, { id: 99, first_name: 'Eve' }).code, undefined, 'a real outsider just gets the members-only message');
+});

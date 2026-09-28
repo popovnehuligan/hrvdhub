@@ -91,6 +91,15 @@ function openExternal(url) {
   else window.open(url, '_blank', 'noopener');
 }
 
+/** The bot's chat, where «Старт» introduces the person to the bot. Closes the app: it reopens from that chat. */
+function openBotChat(bot) {
+  const link = `https://t.me/${bot || 'hrvd_wishlist_bot'}?start=hello`;
+  if (tg?.openTelegramLink && supports('6.1')) {
+    tg.openTelegramLink(link);
+    tg.close?.();
+  } else window.open(link, '_blank', 'noopener');
+}
+
 function confirmAction(message) {
   return new Promise((resolve) => {
     if (tg?.showConfirm && supports('6.2')) tg.showConfirm(message, (ok) => resolve(ok));
@@ -682,9 +691,10 @@ function render() {
         state.error.emoji || '⚠️',
         state.error.title,
         state.error.text,
-        state.error.retry
-          ? h('button', { type: 'button', class: 'button primary', onclick: () => location.reload() }, 'Попробовать снова')
-          : null,
+        state.error.action ||
+          (state.error.retry
+            ? h('button', { type: 'button', class: 'button primary', onclick: () => location.reload() }, 'Попробовать снова')
+            : null),
       ),
     );
     return;
@@ -1465,9 +1475,15 @@ async function boot() {
     state.loaded = true;
   } catch (error) {
     state.error =
-      error.status === 403
-        ? { emoji: '🔒', title: 'Только для своих', text: `${error.message} Попросите админа добавить вас в группу HOROVOD.` }
-        : { title: 'Не удалось загрузить вишлист', text: error.message, retry: true };
+      error.code === 'meet_bot'
+        ? {
+            title: 'Познакомьтесь с ботом',
+            text: `${error.message} Нажмите кнопку ниже, в чате с ботом нажмите «Старт» и откройте вишлист снова.`,
+            action: h('button', { type: 'button', class: 'button primary', onclick: () => openBotChat(error.bot) }, 'Познакомиться с ботом'),
+          }
+        : error.status === 403
+          ? { emoji: '🔒', title: 'Только для своих', text: `${error.message} Попросите админа добавить вас в группу HOROVOD.` }
+          : { title: 'Не удалось загрузить вишлист', text: error.message, retry: true };
     render();
     return;
   }

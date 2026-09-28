@@ -85,7 +85,7 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
         if (custom) return response(200, JSON.stringify(custom));
         if (tgMatch[2] === 'getChatMember') {
           const status = members[params.user_id];
-          return response(200, JSON.stringify(status ? { ok: true, result: { status } } : { ok: false, error_code: 400, description: 'Bad Request: user not found' }));
+          return response(200, JSON.stringify(status ? { ok: true, result: { status } } : { ok: true, result: { status: 'left' } }));
         }
         if (tgMatch[2] === 'getMe') return response(200, JSON.stringify({ ok: true, result: { id: 777, username: 'horovod_wishlist_bot', first_name: 'HOROVOD Вишлист', has_main_web_app: Boolean(properties.TEST_HAS_MAIN_APP) } }));
         if (tgMatch[2] === 'getUpdates') {

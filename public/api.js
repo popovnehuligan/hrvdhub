@@ -38,7 +38,7 @@ function liveApi(url, initData) {
     } catch {
       throw Object.assign(new Error('Сервер ответил непонятно'), { retry: true });
     }
-    if (!data.ok) throw Object.assign(new Error(data.error || 'Ошибка сервера'), { status: data.status });
+    if (!data.ok) throw Object.assign(new Error(data.error || 'Ошибка сервера'), { status: data.status, code: data.code, bot: data.bot });
     return data.data;
   }
 
