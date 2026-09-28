@@ -45,7 +45,17 @@ var USER_AGENTS = [
 
 // GET: a liveness check only. Wishes are served on POST with a Telegram signature.
 function doGet() {
-  return respond(function () { return { alive: true, version: runningVersion(), ts: new Date().toISOString() } });
+  return respond(function () {
+    // No names or ids: only what Claude needs to see from outside whether posting can work.
+    var wishes = [];
+    try { wishes = readWishes() } catch (e) { /* no sheet yet */ }
+    var newest = wishes.map(function (w) { return w.createdAt || '' }).sort().pop() || null;
+    return {
+      alive: true, version: runningVersion(), ts: new Date().toISOString(),
+      status: { group: Boolean(prop('GROUP_CHAT_ID')), topic: Boolean(prop('TOPIC_ID')), wishes: wishes.length,
+                newestWish: newest, lastPostError: prop('LAST_POST_ERROR') || null }
+    };
+  });
 }
 
 function doPost(e) {
