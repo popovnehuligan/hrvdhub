@@ -525,6 +525,7 @@ function doGet() {
     return {
       alive: true, version: runningVersion(), ts: new Date().toISOString(),
       status: { group: Boolean(prop('GROUP_CHAT_ID')), topic: Boolean(prop('TOPIC_ID')), wishes: wishes.length,
+                posted: wishes.filter(function (w) { return w.postedAt }).length,
                 newestWish: newest, lastPostError: prop('LAST_POST_ERROR') || null }
     };
   });
@@ -650,7 +651,7 @@ function handle(action, p, user) {
       if (wish.link && !wish.image) attachLinkImage(wish);
       saveWish(wish);
       if (rid) cache.put(rid, wish.id, 21600);
-      notify('added', wish);
+      announce(wish);
       return { item: view(user)(wish) };
     }
 
@@ -1120,6 +1121,34 @@ function notify(kind, wish) {
   return post(wish, lines.join('\n'));
 }
 
+/** Posts a new wish to the group and remembers that it did, so a failed post can be retried. */
+function announce(wish) {
+  var sent = notify('added', wish);
+  if (sent && sent.ok) wish.postedAt = new Date().toISOString();
+  else wish.postTries = (wish.postTries || 0) + 1;
+  saveWish(wish);
+  return sent;
+}
+
+/** New wishes (last 24 hours) whose post to the group didn't go through: tries again, 3 times at most. */
+function unposted() {
+  var since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  return readWishes().filter(function (w) {
+    return w.status === 'wanted' && !w.postedAt && (w.postTries || 0) < 3 && String(w.createdAt || '') >= since;
+  });
+}
+
+function catchUpPosts() {
+  if (!notifyChat()) return 0;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var sent = 0;
+    unposted().forEach(function (w) { if (announce(w).ok) sent++ });
+    return sent;
+  } finally { lock.releaseLock() }
+}
+
 /** Runs every morning (setup() installs the trigger): one message about purchases that are due. */
 function dailyReminders() {
   var chat = notifyChat();
@@ -1193,13 +1222,14 @@ function checkCode(code) {
 /** Hourly trigger (setup installs it). */
 function autoUpdate() {
   try { refreshCode() } catch (e) { console.warn('Автообновление: ' + e.message) }
+  try { catchUpPosts() } catch (e) { console.warn('Досылка: ' + e.message) }
 }
 
 function refreshNow() {
   var cache = CacheService.getScriptCache();
   if (cache.get('refreshing')) return { busy: true, version: runningVersion() };
   cache.put('refreshing', '1', 20);
-  return { version: refreshCode() };
+  return { version: refreshCode(), caughtUp: catchUpPosts() };
 }
 
 function runningVersion() { return globalThis.WISHLIST_VERSION || 'pasted' }

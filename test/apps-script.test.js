@@ -310,3 +310,23 @@ test('every run switches to the code published on GitHub Pages', () => {
   // No internet: the pasted copy keeps working.
   assert.equal(JSON.parse(createGas({ members }).context.doGet().text).data.version, 'pasted');
 });
+
+test('a post that did not go through is sent again later, once', () => {
+  let down = true;
+  const refuse = { ok: false, error_code: 502, description: 'Bad Gateway' };
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', TOPIC_ID: '77', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
+                          tg: (method) => (down && /^send/.test(method) ? refuse : null) });
+  const created = gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  assert.equal(created.ok, true, created.error);
+  assert.equal(JSON.parse(gas.context.doGet().text).data.status.posted, 0);
+
+  down = false;
+  assert.equal(gas.context.catchUpPosts(), 1);
+  assert.match(gas.sent('sendPhoto').at(-1).params.caption, /Микрофон/);
+  assert.equal(gas.sent('sendPhoto').at(-1).params.message_thread_id, '77');
+  assert.equal(JSON.parse(gas.context.doGet().text).data.status.posted, 1);
+  assert.equal(gas.context.catchUpPosts(), 0, 'not posted twice');
+
+  gas.call('create', { wish: { title: 'Кабели', link: 'https://shop.example/cables' } }, member);
+  assert.equal(gas.context.catchUpPosts(), 0, 'a wish posted right away is not posted again');
+});
