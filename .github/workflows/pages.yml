@@ -4,7 +4,9 @@ name: Publish the app
 
 on:
   push:
-    branches: [main]
+    # GitHub publishes only from the repository's default branch (for now the
+    # claude/… branch; switching the default to main in Settings also works).
+    branches: [main, claude/bold-cerf-acz1wo]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +15,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
