@@ -24,7 +24,7 @@ const shop = {
   'https://shop.example/img/sm58.png': { body: png(), type: 'image/png' },
 };
 
-const world = () => createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop });
+const world = () => createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'yes' }, members, pages: shop });
 
 test('Shared.gs is up to date with public/lib/shared.js', () => {
   execFileSync(process.execPath, ['tools/build-gs.mjs', '--check']);
@@ -45,6 +45,14 @@ test('the script uses only syntax Google Apps Script can parse', () => {
     const match = code.match(pattern);
     assert.equal(match, null, `${name}: …${match && code.slice(Math.max(0, match.index - 40), match.index + 20)}…`);
   }
+});
+
+test('the setup page can put the bot key into the script', () => {
+  const code = fs.readFileSync('public/setup/wishlist-script.txt', 'utf8');
+  assert.equal(code.split("var PASTED_BOT_TOKEN = '';").length, 2, 'exactly one place for the key');
+  const setupPage = fs.readFileSync('public/setup.html', 'utf8');
+  assert.ok(setupPage.includes(`const marker = "var PASTED_BOT_TOKEN = '';";`));
+  assert.ok(fs.existsSync('public/brand/bot-avatar.jpg'), 'setup() downloads the bot picture from the site');
 });
 
 test('only signed Telegram users from the group get in', () => {
@@ -158,16 +166,42 @@ test('the morning reminder goes out once per planned date', () => {
   assert.equal(gas.sent('sendMessage').length, before + 1, 'not repeated');
 });
 
-test('setup finds the group, sets the menu button and the reminder', () => {
-  const gas = createGas({ props: { APP_URL: 'https://popovnehuligan.github.io/hrvdhub/' }, members });
+test('setup does the whole bot: key, group, button, description, picture, reminder', () => {
+  const avatar = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3000, 1)]);
+  const gas = createGas({
+    props: { BOT_TOKEN: undefined },
+    members,
+    pages: { 'https://popovnehuligan.github.io/hrvdhub/brand/bot-avatar.jpg': { body: avatar, type: 'image/jpeg' } },
+  });
+  delete gas.properties.BOT_TOKEN;
+  gas.context.PASTED_BOT_TOKEN = '777:TEST-wishlist-token';
   const report = gas.context.setup();
-  assert.equal(gas.properties.GROUP_CHAT_ID, '-100555');
+
+  assert.equal(gas.properties.BOT_TOKEN, '777:TEST-wishlist-token', 'the pasted key is saved');
+  assert.equal(gas.properties.GROUP_CHAT_ID, '-100555', 'the group the bot is still in (not the one it left)');
   assert.equal(gas.properties.BOT_USERNAME, 'horovod_wishlist_bot');
   assert.equal(gas.sent('setChatMenuButton')[0].params.menu_button.web_app.url, 'https://popovnehuligan.github.io/hrvdhub/');
+  assert.match(gas.sent('setMyDescription')[0].params.description, /Вишлист HOROVOD/);
+  assert.ok(gas.sent('setMyShortDescription')[0].params.short_description.length <= 120);
+  assert.ok(gas.sent('setMyDescription')[0].params.description.length <= 512);
+
+  const photo = gas.sent('setMyProfilePhoto')[0].params;
+  assert.deepEqual(JSON.parse(photo.photo), { type: 'static', photo: 'attach://avatar' });
+  assert.equal(photo.avatar.getBytes().length, avatar.length, 'the picture itself is uploaded');
   assert.deepEqual(gas.triggers.map((t) => [t.handler, t.hour]), [['dailyReminders', 10]]);
   assert.ok(report.some((line) => line.includes('HOROVOD')));
+  assert.ok(!report.some((line) => line.startsWith('✗')), report.join('\n'));
+
   gas.context.setup();
   assert.equal(gas.triggers.length, 1, 'running setup again does not double the reminder');
+  assert.equal(gas.sent('setMyProfilePhoto').length, 1, 'and does not upload the picture again');
+});
+
+test('without the Main Mini App, group buttons open the bot chat', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'no' }, members, pages: shop });
+  gas.call('create', { wish: { title: 'Чайник', link: 'https://alza.sk/kettle' } }, member);
+  const button = gas.sent('sendMessage').at(-1).params.reply_markup.inline_keyboard[0][0];
+  assert.deepEqual({ ...button }, { text: 'Открыть вишлист', url: 'https://t.me/horovod_wishlist_bot' });
 });
 
 test('parses shop pages: Open Graph, JSON-LD, relative addresses', () => {

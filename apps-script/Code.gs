@@ -2,13 +2,17 @@
  * HOROVOD · Вишлист — the backend, running as a Google Apps Script web app on top of
  * a Google Sheet (same setup as the bar bot, horovodart/hrvdbarbot).
  *
- * Script properties (Project Settings → Script Properties):
- *   BOT_TOKEN      — the wishlist bot's token from BotFather. Required. Never goes to the app or to git.
+ * The bot token: the setup page (public/setup.html) puts it into PASTED_BOT_TOKEN below when
+ * copying this script, and setup() moves it into the script properties. It never goes to the
+ * app or to git.
+ *
+ * Script properties (Project Settings → Script Properties), all filled in by setup():
+ *   BOT_TOKEN      — the wishlist bot's token from BotFather.
  *   GROUP_CHAT_ID  — the HOROVOD Telegram group. Its members can use the app, its admins are app admins.
  *                    setup() fills it in by itself if the bot has been added to exactly one group.
  *   ADMIN_IDS      — extra admins by Telegram id, comma separated (optional).
  *   NOTIFY_CHAT_ID — post news somewhere else than the group (optional).
- *   APP_URL        — the GitHub Pages address of the app; setup() puts it on the bot's menu button.
+ *   APP_URL        — the app's address (default: GitHub Pages); setup() puts it on the bot's menu button.
  *   CURRENCY       — default EUR. REMINDER_HOUR — default 10.
  *
  * Shared.gs is generated from public/lib/shared.js (tools/build-gs.mjs): the wish rules,
@@ -17,6 +21,15 @@
  * Sheet «wishes»: one row per wish. The readable columns are for people looking at the
  * sheet; the last column («data») holds the full wish as JSON and is what the app reads.
  */
+
+var PASTED_BOT_TOKEN = '';
+
+var DEFAULT_APP_URL = 'https://popovnehuligan.github.io/hrvdhub/';
+var AVATAR_VERSION = 'wishlist-avatar-1';
+var BOT_DESCRIPTION = 'Вишлист HOROVOD: всё, что нужно купить для Хаба — инструменты, техника и остальное.\n\n' +
+  'Добавляйте желания с фото или ссылкой на магазин, голосуйте за нужное и смотрите, что и когда мы планируем купить.\n\n' +
+  'Откройте кнопкой «Вишлист» внизу.';
+var BOT_SHORT_DESCRIPTION = 'Что купить для Хаба HOROVOD: желания, голоса и план покупок.';
 
 var SHEET_NAME = 'wishes';
 var HEADER = ['id', 'Название', 'Категория', 'Важность', 'Цена', 'Кол-во', 'Статус', 'Когда', 'Голоса', 'Ссылка', 'Добавил', 'data'];
@@ -60,8 +73,8 @@ function fail(message, status) { throw new WishError(message, status || 400) }
 
 /** Checks Telegram's signature on initData. https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app */
 function auth(initData) {
-  var token = prop('BOT_TOKEN');
-  if (!token) fail('Вишлист ещё не настроен: нет BOT_TOKEN', 503);
+  var token = botToken();
+  if (!token) fail('Вишлист ещё не настроен: нет ключа бота', 503);
   if (!initData) fail('Откройте вишлист через Telegram', 401);
 
   var fields = {}, hash = '';
@@ -485,7 +498,7 @@ function attachLinkImage(wish) {
 /* ---------------- Telegram ---------------- */
 
 function tgTry(method, payload) {
-  var token = prop('BOT_TOKEN');
+  var token = botToken();
   var options = { method: 'post', muteHttpExceptions: true };
   var multipart = Object.keys(payload).some(function (k) { return payload[k] && typeof payload[k].getBytes === 'function' });
   if (multipart) {
@@ -513,10 +526,22 @@ function tg(method, payload) {
 var escapeHtml = function (text) { return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') };
 var shorten = function (text, max) { return text.length > max ? text.slice(0, max - 1) + '…' : text };
 
+/**
+ * Where the buttons in group posts lead. With the bot's Main Mini App switched on in BotFather,
+ * straight to the wish (or the plan); otherwise to the chat with the bot, which has the «Вишлист» button.
+ */
 function appLink(startParam) {
-  var base = prop('APP_LINK') || (prop('BOT_USERNAME') ? 'https://t.me/' + prop('BOT_USERNAME') : '');
-  if (!base) return null;
-  return base + '?startapp=' + encodeURIComponent(startParam);
+  if (prop('APP_LINK')) return prop('APP_LINK') + '?startapp=' + encodeURIComponent(startParam);
+  if (!prop('BOT_USERNAME')) return null;
+  var chat = 'https://t.me/' + prop('BOT_USERNAME');
+  return prop('BOT_HAS_MAIN_APP') === 'yes' ? chat + '?startapp=' + encodeURIComponent(startParam) : chat;
+}
+
+function openButton(startParam, text) {
+  var link = appLink(startParam);
+  if (!link) return undefined;
+  var direct = prop('APP_LINK') || prop('BOT_HAS_MAIN_APP') === 'yes';
+  return { inline_keyboard: [[{ text: direct ? text : 'Открыть вишлист', url: link }]] };
 }
 
 function priceText(wish) {
@@ -540,9 +565,9 @@ function notifyChat() { return prop('NOTIFY_CHAT_ID') || prop('GROUP_CHAT_ID') }
 function post(wish, text) {
   var chat = notifyChat();
   if (!chat) return;
-  var link = appLink('item_' + wish.id);
   var params = { chat_id: chat, parse_mode: 'HTML' };
-  if (link) params.reply_markup = { inline_keyboard: [[{ text: 'Открыть в вишлисте', url: link }]] };
+  var button = openButton('item_' + wish.id, 'Открыть в вишлисте');
+  if (button) params.reply_markup = button;
   try {
     var photo = null;
     var drive = /^drive:(.+)$/.exec(wish.image || '');
@@ -592,9 +617,9 @@ function dailyReminders() {
   });
   var total = sumTotals(due).total;
   if (total) lines.push('', 'Итого: <b>' + formatMoney(total, currency()) + '</b>');
-  var link = appLink('plan');
+  refreshBotInfo();
   tg('sendMessage', { chat_id: chat, text: shorten(lines.join('\n'), 4000), parse_mode: 'HTML',
-                      reply_markup: link ? { inline_keyboard: [[{ text: 'Открыть план', url: link }]] } : undefined });
+                      reply_markup: openButton('plan', 'Открыть план') });
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -608,71 +633,107 @@ function dailyReminders() {
 /* ---------------- one-time setup ---------------- */
 
 /**
- * Run once from the Apps Script editor after adding BOT_TOKEN (and again whenever you like):
- * creates the sheet and the photo folder, finds the group, sets the bot's menu button and
- * the morning reminder. Prints what it did.
+ * Run once from the Apps Script editor (and again whenever you like). Does everything:
+ * saves the bot key, creates the sheet and the photo folder, finds the HOROVOD group, gives the
+ * bot its picture, description and «Вишлист» button, and turns on the morning reminder.
+ * Prints what it did.
  */
 function setup() {
-  if (!prop('BOT_TOKEN')) throw new Error('Сначала добавьте BOT_TOKEN в Project Settings → Script Properties');
+  if (PASTED_BOT_TOKEN && prop('BOT_TOKEN') !== PASTED_BOT_TOKEN) setProp('BOT_TOKEN', PASTED_BOT_TOKEN);
+  if (!botToken()) throw new Error('Нет ключа бота: скопируйте скрипт заново со страницы настройки, вставив ключ');
   var report = [];
   wishSheet();
-  report.push('Лист «' + SHEET_NAME + '» готов');
-  report.push('Папка для фото: ' + photosFolder().getName());
+  report.push('✓ Лист «' + SHEET_NAME + '» готов');
+  report.push('✓ Папка для фото: «' + photosFolder().getName() + '» на Google Диске');
 
-  var me = tg('getMe', {});
-  setProp('BOT_USERNAME', me.username);
-  report.push('Бот: @' + me.username);
+  var me = refreshBotInfo();
+  report.push('✓ Бот: @' + me.username + ' («' + me.first_name + '»)');
 
   if (!prop('GROUP_CHAT_ID')) {
     var groups = findGroups();
     if (groups.length === 1) {
       setProp('GROUP_CHAT_ID', groups[0].id);
-      report.push('Группа найдена: ' + groups[0].title + ' (' + groups[0].id + ')');
+      report.push('✓ Группа: «' + groups[0].title + '»');
     } else if (!groups.length) {
-      report.push('Группа не найдена: добавьте бота в группу HOROVOD, напишите там любое сообщение и запустите setup() ещё раз');
+      report.push('✗ Группа не найдена. Добавьте бота в группу HOROVOD (если он уже там — удалите и добавьте снова) и запустите setup ещё раз');
     } else {
-      report.push('Бот состоит в нескольких группах, впишите нужную в GROUP_CHAT_ID: ' +
-                  groups.map(function (g) { return g.title + ' = ' + g.id }).join('; '));
+      report.push('✗ Бот состоит в нескольких группах. Впишите нужную в свойство GROUP_CHAT_ID: ' +
+                  groups.map(function (g) { return '«' + g.title + '» = ' + g.id }).join('; '));
     }
   } else {
-    report.push('Группа: ' + prop('GROUP_CHAT_ID'));
+    report.push('✓ Группа: ' + prop('GROUP_CHAT_ID'));
   }
 
-  if (prop('APP_URL')) {
-    tg('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Вишлист', web_app: { url: prop('APP_URL') } } });
-    report.push('Кнопка «Вишлист» у бота ведёт на ' + prop('APP_URL'));
-  } else {
-    report.push('APP_URL не задан — кнопку меню у бота не трогаю');
-  }
+  var appUrl = appUrlSetting();
+  tg('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Вишлист', web_app: { url: appUrl } } });
+  report.push('✓ Кнопка «Вишлист» у бота: ' + appUrl);
+
+  tg('setMyDescription', { description: BOT_DESCRIPTION });
+  tg('setMyShortDescription', { short_description: BOT_SHORT_DESCRIPTION });
+  report.push('✓ Описание бота');
+
+  report.push(setBotPicture(appUrl));
 
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'dailyReminders') ScriptApp.deleteTrigger(t);
   });
   var hour = Number(prop('REMINDER_HOUR') || 10);
   ScriptApp.newTrigger('dailyReminders').timeBased().atHour(hour).everyDays(1).inTimezone(timeZone()).create();
-  report.push('Напоминания: каждый день около ' + hour + ':00');
+  report.push('✓ Напоминания: каждый день около ' + hour + ':00');
+
+  if (me.has_main_web_app) report.push('✓ Кнопки в группе открывают нужное желание сразу');
+  else report.push('• Кнопки в группе открывают чат с ботом. Чтобы они открывали желание сразу: BotFather → бот → Bot Settings → Configure Mini App → Enable, адрес ' + appUrl);
 
   report.forEach(function (line) { Logger.log(line) });
   return report;
 }
 
-/** Groups the bot was added to, from its recent updates. */
+/** The bot's username and whether it has a Main Mini App (switched on in BotFather). */
+function refreshBotInfo() {
+  var me = tg('getMe', {});
+  setProp('BOT_USERNAME', me.username);
+  setProp('BOT_HAS_MAIN_APP', me.has_main_web_app ? 'yes' : 'no');
+  return me;
+}
+
+/** Uploads the bot's profile picture (from the app's site), once per picture version. */
+function setBotPicture(appUrl) {
+  if (prop('AVATAR_VERSION') === AVATAR_VERSION) return '✓ Картинка бота уже стоит';
+  try {
+    var response = UrlFetchApp.fetch(appUrl + 'brand/bot-avatar.jpg', { muteHttpExceptions: true });
+    if (response.getResponseCode() !== 200) throw new Error('картинка не скачалась (' + response.getResponseCode() + ')');
+    var picture = response.getBlob().setName('bot-avatar.jpg');
+    var result = tgTry('setMyProfilePhoto', { photo: { type: 'static', photo: 'attach://avatar' }, avatar: picture });
+    if (!result.ok) throw new Error(result.description || 'Telegram не принял картинку');
+    setProp('AVATAR_VERSION', AVATAR_VERSION);
+    return '✓ Картинка бота';
+  } catch (e) {
+    return '✗ Картинку бота поставить не вышло (' + e.message + '). Можно вручную: BotFather → /setuserpic, файл ' + appUrl + 'brand/bot-avatar.png';
+  }
+}
+
+/** Groups the bot is in, from its recent updates (being added to a group is one). */
 function findGroups() {
   var updates = tgTry('getUpdates', { allowed_updates: ['message', 'my_chat_member'] });
-  var seen = {}, groups = [];
+  var groups = {}, order = [];
   (updates.result || []).forEach(function (u) {
     var chat = (u.message && u.message.chat) || (u.my_chat_member && u.my_chat_member.chat);
-    if (chat && (chat.type === 'group' || chat.type === 'supergroup') && !seen[chat.id]) {
-      seen[chat.id] = true;
-      groups.push({ id: String(chat.id), title: chat.title || '' });
-    }
+    if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) return;
+    var status = u.my_chat_member ? u.my_chat_member.new_chat_member.status : 'member';
+    if (!groups[chat.id]) order.push(chat.id);
+    groups[chat.id] = { id: String(chat.id), title: chat.title || '', present: status === 'member' || status === 'administrator' };
   });
-  return groups;
+  return order.map(function (id) { return groups[id] }).filter(function (g) { return g.present });
 }
 
 /* ---------------- small helpers ---------------- */
 
 function prop(key) { return PropertiesService.getScriptProperties().getProperty(key) }
+function botToken() { return prop('BOT_TOKEN') || PASTED_BOT_TOKEN }
+function appUrlSetting() {
+  var url = prop('APP_URL') || DEFAULT_APP_URL;
+  return /\/$/.test(url) ? url : url + '/';
+}
 function setProp(key, value) { PropertiesService.getScriptProperties().setProperty(key, String(value)) }
 function currency() { return String(prop('CURRENCY') || 'EUR').toUpperCase() }
 // A script pasted by hand has no manifest, so its time zone is the account's; Bratislava by default.

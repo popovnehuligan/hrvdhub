@@ -54,7 +54,8 @@ export function createGas({ props = {}, members = {}, pages = {} } = {}) {
 
   function blob(data, type, name) {
     const bytes = toBytes(data);
-    return { getBytes: () => bytes, getContentType: () => type, getName: () => name };
+    const b = { getBytes: () => bytes, getContentType: () => type, getName: () => name, setName: (n) => ((name = n), b) };
+    return b;
   }
 
   function response(status, body, type = 'text/html') {
@@ -63,6 +64,7 @@ export function createGas({ props = {}, members = {}, pages = {} } = {}) {
       getResponseCode: () => status,
       getContentText: () => buf.toString('utf8'),
       getContent: () => signed(buf),
+      getBlob: () => blob(signed(buf), type, null),
       getHeaders: () => ({ 'Content-Type': type }),
     };
   }
@@ -77,11 +79,13 @@ export function createGas({ props = {}, members = {}, pages = {} } = {}) {
           const status = members[params.user_id];
           return response(200, JSON.stringify(status ? { ok: true, result: { status } } : { ok: false, error_code: 400, description: 'Bad Request: user not found' }));
         }
-        if (tgMatch[2] === 'getMe') return response(200, JSON.stringify({ ok: true, result: { username: 'horovod_wishlist_bot' } }));
+        if (tgMatch[2] === 'getMe') return response(200, JSON.stringify({ ok: true, result: { username: 'horovod_wishlist_bot', first_name: 'HOROVOD Вишлист', has_main_web_app: Boolean(properties.TEST_HAS_MAIN_APP) } }));
         if (tgMatch[2] === 'getUpdates') {
           return response(200, JSON.stringify({ ok: true, result: [
-            { update_id: 1, my_chat_member: { chat: { id: -100555, type: 'supergroup', title: 'HOROVOD' } } },
+            { update_id: 1, my_chat_member: { chat: { id: -100555, type: 'supergroup', title: 'HOROVOD' }, new_chat_member: { status: 'member' } } },
             { update_id: 2, message: { chat: { id: 42, type: 'private' } } },
+            { update_id: 3, my_chat_member: { chat: { id: -100777, type: 'group', title: 'Old test group' }, new_chat_member: { status: 'member' } } },
+            { update_id: 4, my_chat_member: { chat: { id: -100777, type: 'group', title: 'Old test group' }, new_chat_member: { status: 'left' } } },
           ] }));
         }
         return response(200, JSON.stringify({ ok: true, result: true }));

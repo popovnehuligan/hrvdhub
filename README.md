@@ -79,6 +79,13 @@ paste `apps-script/Code.gs`, `apps-script/Shared.gs` and `appsscript.json` into 
 Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), and put the `…/exec`
 address into `public/config.js`.
 
+### The bot's look
+
+`setup()` also gives the bot its profile picture (`public/brand/bot-avatar.jpg`, drawn in the style of
+the bar bot's icon: a gift box with a mic and a guitar, the HRVD and eye stickers, «WISHLIST»), its
+description and the «Вишлист» menu button. The picture's source is `public/brand/bot-avatar.svg`.
+To change the picture: replace the files and bump `AVATAR_VERSION` in `apps-script/Code.gs`.
+
 ### Script properties
 
 | Property | What it's for |

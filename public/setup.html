@@ -18,15 +18,24 @@
       .guide .button { margin-top: 8px; text-decoration: none; }
       .guide .hint { color: var(--muted); font-size: 14px; }
       .copied { color: var(--text); font-weight: 700; margin-left: 8px; }
+      .guide input, .guide textarea { display: block; width: 100%; margin: 6px 0 2px; padding: 10px 14px; min-height: 46px; font: 600 15px ui-monospace, Menlo, monospace; color: var(--text); background: var(--surface); border: 1.5px solid var(--line); border-radius: 14px; outline: none; }
+      .guide input:focus { border-color: var(--line-strong); }
+      .avatar-preview { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+      .avatar-preview img { border-radius: 50%; flex: none; box-shadow: 0 0 0 1.5px var(--line); }
+      .avatar-preview p { margin: 0; color: var(--muted); font-weight: 600; }
     </style>
   </head>
   <body>
     <header class="top" style="margin: 0 0 18px">
       <div class="top-brand"><span class="eye" aria-hidden="true"></span><span class="kicker">HOROVOD · Хаб</span></div>
       <h1>Wishlist setup</h1>
-      <p class="top-sub">Connect the wishlist to Google, so the whole team shares one list. About 5 minutes, copy and paste only.</p>
+      <p class="top-sub">Connect the wishlist to Google, so the whole team shares one list. About 5 minutes, copy, paste and click.</p>
     </header>
     <main class="guide">
+      <div class="avatar-preview">
+        <img src="brand/bot-avatar.png" alt="The wishlist bot's picture" width="96" height="96" />
+        <p>At the end the bot gets this picture, its description and the «Вишлист» button by itself.</p>
+      </div>
       <ol>
         <li>
           <h2>Make a new Google Sheet</h2>
@@ -40,28 +49,22 @@
         </li>
         <li>
           <h2>Paste the wishlist script</h2>
-          <p>Press this button, then in the Apps Script tab select everything (<b>Ctrl+A</b> / <b>⌘A</b>), paste (<b>Ctrl+V</b> / <b>⌘V</b>) and press the save icon 💾.</p>
+          <p>Paste the wishlist bot’s key here (the one you gave Claude at the start):</p>
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="1234567890:AA…" aria-label="Bot key" />
+          <p class="hint">The key stays on this computer: it only goes into the script you copy.</p>
           <button class="button primary" id="copy" type="button">Copy script</button><span class="copied" id="copied"></span>
-          <p class="hint">Name the project “HOROVOD Вишлист” if it asks.</p>
-        </li>
-        <li>
-          <h2>Add the bot key</h2>
-          <p>On the left, click the gear <b>⚙ Project Settings</b>, scroll down to <b>Script Properties</b> → <b>Add script property</b>, and add two:</p>
-          <ul>
-            <li><code>BOT_TOKEN</code> — the wishlist bot’s key (the one you gave Claude at the start)</li>
-            <li><code>APP_URL</code> — <code>https://popovnehuligan.github.io/hrvdhub/</code></li>
-          </ul>
-          <p>Press <b>Save script properties</b>.</p>
+          <textarea id="manual" readonly hidden rows="6"></textarea>
+          <p>Then in the Apps Script tab select everything (<b>Ctrl+A</b> / <b>⌘A</b>), paste (<b>Ctrl+V</b> / <b>⌘V</b>) and press the save icon 💾.</p>
         </li>
         <li>
           <h2>Put the bot in the group</h2>
-          <p>In Telegram, add the wishlist bot to the HOROVOD group and write any message there (for example “hi”).</p>
+          <p>In Telegram, open the HOROVOD group → <b>Add members</b> → find the wishlist bot → add it. It doesn’t need to be an admin.</p>
         </li>
         <li>
-          <h2>Run setup once</h2>
-          <p>Back in Apps Script, click <b>&lt; &gt; Editor</b> on the left. At the top, pick <b>setup</b> in the dropdown and press <b>Run</b>.</p>
-          <p>Google asks for permission: <b>Review permissions</b> → choose horovod.info@gmail.com → <b>Advanced</b> → <b>Go to HOROVOD Вишлист (unsafe)</b> → <b>Allow</b>.</p>
-          <p class="hint">“Unsafe” only means Google hasn’t reviewed this private script. The bar bot’s script got the same warning. At the bottom you’ll see what it did, e.g. “Группа найдена”.</p>
+          <h2>Run setup</h2>
+          <p>Back in Apps Script, at the top pick <b>setup</b> in the dropdown and press <b>Run</b>.</p>
+          <p>Google asks for permission: <b>Review permissions</b> → choose horovod.info@gmail.com → <b>Advanced</b> → <b>Go to … (unsafe)</b> → <b>Allow</b>.</p>
+          <p class="hint">“Unsafe” only means Google hasn’t reviewed this private script; the bar bot’s script got the same warning. At the bottom a log shows every step with ✓. If a line has ✗, it says what to do.</p>
         </li>
         <li>
           <h2>Publish the script</h2>
@@ -70,25 +73,43 @@
             <li>Execute as: <b>Me</b></li>
             <li>Who has access: <b>Anyone</b></li>
           </ul>
-          <p>Press <b>Deploy</b> and copy the <b>Web app URL</b> (it ends with <code>/exec</code>).</p>
-        </li>
-        <li>
-          <h2>Send that URL to Claude</h2>
-          <p>Claude connects the app to it and publishes. Then the «Вишлист» button in the bot opens the real, shared wishlist.</p>
+          <p>Press <b>Deploy</b>, copy the <b>Web app URL</b> (it ends with <code>/exec</code>) and send it to Claude. Claude connects the app to it, and the «Вишлист» button in the bot opens the real, shared wishlist.</p>
         </li>
       </ol>
     </main>
     <script>
       const button = document.getElementById('copy');
       const note = document.getElementById('copied');
+      const input = document.getElementById('token');
+      const manual = document.getElementById('manual');
       button.addEventListener('click', async () => {
+        const token = input.value.trim();
+        if (!/^\d{6,}:[\w-]{30,}$/.test(token)) {
+          note.textContent = 'That doesn’t look like a bot key (it looks like 1234567890:AA…).';
+          input.focus();
+          return;
+        }
+        let code;
         try {
-          const code = await (await fetch('setup/wishlist-script.txt', { cache: 'no-store' })).text();
+          code = await (await fetch('setup/wishlist-script.txt', { cache: 'no-store' })).text();
+        } catch {
+          note.textContent = 'Could not load the script. Check the internet and try again.';
+          return;
+        }
+        const marker = "var PASTED_BOT_TOKEN = '';";
+        if (!code.includes(marker)) {
+          note.textContent = 'The script looks wrong. Tell Claude.';
+          return;
+        }
+        code = code.replace(marker, `var PASTED_BOT_TOKEN = '${token}';`);
+        try {
           await navigator.clipboard.writeText(code);
-          note.textContent = '✓ Copied — now paste it in Apps Script';
-        } catch (error) {
-          note.textContent = 'Could not copy automatically. Opening the script: select all and copy it.';
-          window.open('setup/wishlist-script.txt', '_blank');
+          note.textContent = '✓ Copied. Now paste it in Apps Script.';
+        } catch {
+          manual.hidden = false;
+          manual.value = code;
+          manual.select();
+          note.textContent = 'Copy didn’t work automatically: the script is selected below, press Ctrl+C / ⌘C.';
         }
       });
     </script>
