@@ -21,12 +21,8 @@ const built = toAppsScript(source);
 const bundleTarget = path.join(root, 'public/setup/wishlist-script.txt');
 const bundle = `${built}\n\n${fs.readFileSync(path.join(root, 'apps-script/Code.gs'), 'utf8')}`;
 
-// The manifest, which the script fetches when it updates itself.
-const manifestTarget = path.join(root, 'public/setup/appsscript.json');
-const manifest = fs.readFileSync(path.join(root, 'apps-script/appsscript.json'), 'utf8');
-
 if (process.argv.includes('--check')) {
-  for (const [file, expected] of [[target, built], [bundleTarget, bundle], [manifestTarget, manifest]]) {
+  for (const [file, expected] of [[target, built], [bundleTarget, bundle]]) {
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     if (current !== expected) {
       console.error(`${path.relative(root, file)} is out of date: run node tools/build-gs.mjs`);
@@ -37,6 +33,5 @@ if (process.argv.includes('--check')) {
   fs.writeFileSync(target, built);
   fs.mkdirSync(path.dirname(bundleTarget), { recursive: true });
   fs.writeFileSync(bundleTarget, bundle);
-  fs.writeFileSync(manifestTarget, manifest);
-  console.log('apps-script/Shared.gs, public/setup/wishlist-script.txt and appsscript.json written');
+  console.log('apps-script/Shared.gs and public/setup/wishlist-script.txt written');
 }

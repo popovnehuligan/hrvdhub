@@ -45,7 +45,7 @@ var USER_AGENTS = [
 
 // GET: a liveness check only. Wishes are served on POST with a Telegram signature.
 function doGet() {
-  return respond(function () { return { alive: true, version: prop('CODE_HASH') || '', ts: new Date().toISOString() } });
+  return respond(function () { return { alive: true, version: runningVersion(), ts: new Date().toISOString() } });
 }
 
 function doPost(e) {
@@ -53,7 +53,7 @@ function doPost(e) {
     var body;
     try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}') } catch (err) { throw new Error('Неверный запрос') }
     // Claude calls this after publishing a new version; the code comes only from GitHub Pages.
-    if (body.action === 'refreshCode') return updateNow();
+    if (body.action === 'refreshCode') return refreshNow();
     var user = auth(body.initData);
     return handle(String(body.action || ''), body.payload || {}, user);
   });
@@ -666,54 +666,61 @@ function dailyReminders() {
   } finally { lock.releaseLock() }
 }
 
-/* ---------------- updating itself ---------------- */
+/* ---------------- always the latest code ---------------- */
 
 /**
- * The script keeps itself up to date with the version published on GitHub Pages: new code →
- * a new version → the web app's deployment points at it. Runs every hour, at the end of setup(),
- * and when Claude asks (POST action «refreshCode») after publishing. Needs the Apps Script API
- * switched on at https://script.google.com/home/usersettings.
+ * This script is pasted into Google only once. At the start of every run it switches to the
+ * latest version published on GitHub Pages (see the end of this file), so new versions go live
+ * without anyone pasting or deploying. The published code is kept in the script's cache for a few
+ * hours and refreshed every hour (autoUpdate) and when Claude asks after publishing (POST action
+ * «refreshCode»). If anything goes wrong, this pasted copy keeps working.
  */
-function selfUpdate(force) {
-  var bust = '?t=' + Date.now();
-  var code = fetchText(appUrlSetting() + 'setup/wishlist-script.txt' + bust);
-  var manifest = fetchText(appUrlSetting() + 'setup/appsscript.json' + bust);
-  if (code.indexOf('function doPost') < 0 || manifest.indexOf('oauthScopes') < 0) throw new Error('на GitHub Pages не тот скрипт');
-  var hash = codeHash(code + manifest);
-  if (!force && prop('CODE_HASH') === hash) return { updated: false, version: hash };
+var CODE_CACHE_KEY = 'latest-code';
+var CODE_PART = 25000; // characters per cache entry: Cyrillic takes 2 bytes, an entry holds 100 KB
 
-  var id = ScriptApp.getScriptId();
-  scriptApi('put', '/projects/' + id + '/content', { files: [
-    { name: 'appsscript', type: 'JSON', source: manifest },
-    { name: 'Code', type: 'SERVER_JS', source: code }
-  ] });
-  var version = scriptApi('post', '/projects/' + id + '/versions', { description: 'wishlist ' + hash });
-  var deployments = scriptApi('get', '/projects/' + id + '/deployments').deployments || [];
-  var moved = 0;
-  deployments.forEach(function (d) {
-    var web = (d.entryPoints || []).some(function (e) { return e.entryPointType === 'WEB_APP' });
-    if (!web || !d.deploymentConfig || !d.deploymentConfig.versionNumber) return; // @HEAD follows the code by itself
-    scriptApi('put', '/projects/' + id + '/deployments/' + d.deploymentId, { deploymentConfig: {
-      scriptId: id, versionNumber: version.versionNumber, manifestFileName: 'appsscript', description: 'wishlist ' + hash } });
-    moved++;
-  });
-  setProp('CODE_HASH', hash);
-  return { updated: true, version: hash, versionNumber: version.versionNumber, deployments: moved };
+/** Downloads the published script and keeps it in the cache. Returns its version. */
+function refreshCode() {
+  var code = fetchText(appUrlSetting() + 'setup/wishlist-script.txt?t=' + Date.now());
+  checkCode(code);
+  var hash = codeHash(code);
+  var count = Math.ceil(code.length / CODE_PART), parts = {};
+  for (var i = 0; i < count; i++) parts[CODE_CACHE_KEY + i] = code.slice(i * CODE_PART, (i + 1) * CODE_PART);
+  parts[CODE_CACHE_KEY] = JSON.stringify({ parts: count, hash: hash });
+  CacheService.getScriptCache().putAll(parts, 21600);
+  return hash;
 }
 
-/** Hourly trigger. */
-function autoUpdate() {
-  try { selfUpdate(false) } catch (e) { console.warn('Автообновление: ' + e.message) }
-}
-
-function updateNow() {
+function cachedCode() {
   var cache = CacheService.getScriptCache();
-  if (cache.get('updating')) return { updated: false, busy: true, version: prop('CODE_HASH') || '' };
-  cache.put('updating', '1', 30);
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try { return selfUpdate(false) } finally { lock.releaseLock() }
+  var head = cache.get(CODE_CACHE_KEY);
+  if (!head) return null;
+  head = JSON.parse(head);
+  var keys = [];
+  for (var i = 0; i < head.parts; i++) keys.push(CODE_CACHE_KEY + i);
+  var got = cache.getAll(keys);
+  if (keys.some(function (k) { return got[k] == null })) return null;
+  return { code: keys.map(function (k) { return got[k] }).join(''), hash: head.hash };
 }
+
+/** Only the wishlist script, and only if it parses: a broken download never replaces working code. */
+function checkCode(code) {
+  if (code.indexOf('function doPost') < 0 || code.indexOf('WISHLIST_LOADED') < 0) throw new Error('на GitHub Pages не тот скрипт');
+  new Function(code); // parses without running
+}
+
+/** Hourly trigger (setup installs it). */
+function autoUpdate() {
+  try { refreshCode() } catch (e) { console.warn('Автообновление: ' + e.message) }
+}
+
+function refreshNow() {
+  var cache = CacheService.getScriptCache();
+  if (cache.get('refreshing')) return { busy: true, version: runningVersion() };
+  cache.put('refreshing', '1', 20);
+  return { version: refreshCode() };
+}
+
+function runningVersion() { return globalThis.WISHLIST_VERSION || 'pasted' }
 
 function fetchText(url) {
   var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -724,21 +731,6 @@ function fetchText(url) {
 function codeHash(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
     .map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2) }).join('').slice(0, 12);
-}
-
-function scriptApi(method, path, body) {
-  var options = { method: method, muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } };
-  if (body) { options.contentType = 'application/json'; options.payload = JSON.stringify(body) }
-  var response = UrlFetchApp.fetch('https://script.googleapis.com/v1' + path, options);
-  var data = {};
-  try { data = JSON.parse(response.getContentText() || '{}') } catch (e) { /* not JSON */ }
-  if (response.getResponseCode() >= 300) {
-    var message = (data.error && data.error.message) || ('HTTP ' + response.getResponseCode());
-    if (/Apps Script API|has not been used|is disabled/i.test(message)) message = 'включите Google Apps Script API на https://script.google.com/home/usersettings';
-    else if (/insufficient|scope/i.test(message)) message = 'нет разрешения: запустите setup и нажмите «Разрешить»';
-    throw new Error(message);
-  }
-  return data;
 }
 
 /* ---------------- one-time setup ---------------- */
@@ -798,11 +790,9 @@ function setup() {
   });
   ScriptApp.newTrigger('autoUpdate').timeBased().everyHours(1).create();
   try {
-    var update = selfUpdate(true);
-    report.push('✓ Автообновление включено: веб-приложение на версии ' + update.version +
-                (update.deployments ? '' : ' (опубликованного веб-приложения не нашлось: Deploy → New deployment → Web app)'));
+    report.push('✓ Автообновление: свежий код с GitHub, версия ' + refreshCode());
   } catch (e) {
-    report.push('✗ Автообновление не работает: ' + e.message);
+    report.push('✗ Автообновление: ' + e.message);
   }
 
   if (me.has_main_web_app) report.push('✓ Кнопки в группе открывают нужное желание сразу');
@@ -953,3 +943,22 @@ function currency() { return String(prop('CURRENCY') || 'EUR').toUpperCase() }
 // A script pasted by hand has no manifest, so its time zone is the account's; Bratislava by default.
 function timeZone() { return prop('TIMEZONE') || 'Europe/Bratislava' }
 function today() { return Utilities.formatDate(new Date(), timeZone(), 'yyyy-MM-dd') }
+
+// Runs at the start of every run, after everything above is defined: switch to the latest
+// published code. The published code has this same block; the flag stops it from loading twice.
+(function () {
+  if (globalThis.WISHLIST_LOADED) return;
+  globalThis.WISHLIST_LOADED = true;
+  try {
+    var latest = cachedCode();
+    if (!latest) { refreshCode(); latest = cachedCode() }
+    if (!latest) return;
+    checkCode(latest.code);
+    var pasted = PASTED_BOT_TOKEN;
+    (0, eval)(latest.code);
+    if (pasted) PASTED_BOT_TOKEN = pasted;
+    globalThis.WISHLIST_VERSION = latest.hash;
+  } catch (e) {
+    console.warn('Работает вставленная версия: ' + e.message);
+  }
+})();

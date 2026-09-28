@@ -23,37 +23,25 @@
     <header class="top" style="margin: 0 0 18px">
       <div class="top-brand"><span class="eye" aria-hidden="true"></span><span class="kicker">HOROVOD · Хаб</span></div>
       <h1>Последнее ручное обновление</h1>
-      <p class="top-sub">Минут пять. После этого скрипт в Google будет обновляться сам, и Claude сможет выкладывать изменения без вас.</p>
+      <p class="top-sub">Пара минут. После этого скрипт в Google будет обновляться сам, и Claude сможет выкладывать изменения без вас.</p>
     </header>
     <main class="guide">
       <ol>
         <li>
-          <h2>Разрешите скриптам обновляться</h2>
-          <p>Войдите как <b>horovod.info@gmail.com</b>, откройте страницу ниже и включите переключатель <b>Google Apps Script API</b>.</p>
-          <a class="button" href="https://script.google.com/home/usersettings" target="_blank" rel="noopener">Открыть настройки</a>
-        </li>
-        <li>
-          <h2>Покажите файл настроек проекта</h2>
-          <p>В Apps Script вишлиста слева нажмите ⚙️ <b>Project Settings</b> и поставьте галочку <b>Show "appsscript.json" manifest file in editor</b>.</p>
-        </li>
-        <li>
           <h2>Вставьте скрипт</h2>
           <button class="button primary" type="button" data-copy="setup/wishlist-script.txt">Скопировать скрипт</button><span class="copied"></span>
           <textarea readonly hidden rows="5"></textarea>
-          <p>Слева нажмите <b>&lt;&gt; Editor</b>, откройте файл <b>Code.gs</b>, выделите всё (<b>Ctrl+A</b> / <b>⌘A</b>), вставьте (<b>Ctrl+V</b> / <b>⌘V</b>) и нажмите 💾.</p>
-          <p class="hint">Ключ бота вставлять не нужно: он уже сохранён в скрипте.</p>
-        </li>
-        <li>
-          <h2>Вставьте настройки проекта</h2>
-          <button class="button primary" type="button" data-copy="setup/appsscript.json">Скопировать настройки</button><span class="copied"></span>
-          <textarea readonly hidden rows="5"></textarea>
-          <p>Откройте файл <b>appsscript.json</b>, выделите всё, вставьте и нажмите 💾.</p>
+          <p>В Apps Script вишлиста откройте файл <b>Code.gs</b>, выделите всё (<b>Ctrl+A</b> / <b>⌘A</b>), вставьте (<b>Ctrl+V</b> / <b>⌘V</b>) и нажмите 💾.</p>
+          <p class="hint">Ключ бота вставлять не нужно: он уже сохранён в скрипте. Файл appsscript.json трогать не нужно.</p>
         </li>
         <li>
           <h2>Запустите setup</h2>
-          <p>Вверху выберите функцию <b>setup</b> и нажмите <b>Run</b>. Google попросит новые разрешения: <b>Review permissions</b> → horovod.info@gmail.com → <b>Advanced</b> → <b>Go to … (unsafe)</b> → <b>Allow</b>.</p>
-          <p>Внизу в логе должна быть строка <b>✓ Автообновление включено</b>. Нажимать Deploy не нужно: setup сам выложит новую версию.</p>
-          <p class="hint">Если в строке ✗, там написано, что сделать. Или пришлите скриншот Claude.</p>
+          <p>Вверху выберите функцию <b>setup</b> и нажмите <b>Run</b>. В логе внизу должна быть строка <b>✓ Автообновление: свежий код с GitHub</b>.</p>
+        </li>
+        <li>
+          <h2>Опубликуйте</h2>
+          <p>Справа вверху: <b>Deploy → Manage deployments</b> → карандаш ✏️ → в поле <b>Version</b> выберите <b>New version</b> → <b>Deploy</b>.</p>
+          <p class="hint">Это в последний раз: дальше новые версии включаются сами.</p>
         </li>
       </ol>
     </main>

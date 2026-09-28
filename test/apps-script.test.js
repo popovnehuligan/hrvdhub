@@ -27,7 +27,6 @@ const shop = {
 // What GitHub Pages serves: the script updates itself from these.
 const published = {
   'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt': { body: fs.readFileSync('public/setup/wishlist-script.txt', 'utf8') },
-  'https://popovnehuligan.github.io/hrvdhub/setup/appsscript.json': { body: fs.readFileSync('public/setup/appsscript.json', 'utf8') },
 };
 
 const world = () => createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'yes' }, members, pages: shop });
@@ -196,7 +195,6 @@ test('setup does the whole bot: key, group, button, description, picture, remind
   assert.equal(photo.avatar.getBytes().length, avatar.length, 'the picture itself is uploaded');
   assert.deepEqual(gas.triggers.map((t) => [t.handler, t.hour ?? t.everyHours]), [['dailyReminders', 10], ['autoUpdate', 1]]);
   assert.ok(report.some((line) => line.startsWith('✓ Автообновление')), report.join('\n'));
-  assert.equal(gas.project.deployments[1].deploymentConfig.versionNumber, 2, 'setup publishes the web app itself');
   assert.ok(report.some((line) => line.includes('HOROVOD')));
   assert.equal(gas.properties.TOPIC_ID, '77', 'found the Wishlist topic');
   assert.ok(report.some((line) => line.includes('«Wishlist»')));
@@ -280,32 +278,35 @@ test('check() finds what is wrong and posts a test message', () => {
   assert.equal(moved.properties.GROUP_CHAT_ID, '-100555', 'follows the group to its new address');
 });
 
-test('the script updates itself from GitHub Pages and republishes the web app', () => {
-  const gas = createGas({ members, pages: published });
-  const first = JSON.parse(gas.context.doPost({ postData: { contents: JSON.stringify({ action: 'refreshCode' }) } }).text);
-  assert.equal(first.ok, true, first.error);
-  assert.equal(first.data.updated, true);
-  assert.deepEqual(gas.project.files.map((f) => f.name), ['appsscript', 'Code']);
-  assert.equal(gas.project.files[1].source, published['https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt'].body);
-  assert.match(gas.project.files[0].source, /script\.deployments/, 'the manifest keeps the right to republish');
-  assert.equal(gas.project.calls[0].auth, 'Bearer oauth-token', 'as the owner of the script');
-  assert.equal(gas.project.deployments[1].deploymentConfig.versionNumber, 2, 'the live web app moves to the new version');
-  assert.deepEqual({ ...gas.project.deployments[0].deploymentConfig }, {}, '@HEAD is left alone');
-  assert.equal(JSON.parse(gas.context.doGet().text).data.version, first.data.version, 'the version is visible from outside');
+test('every run switches to the code published on GitHub Pages', () => {
+  const url = 'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt';
+  const latest = published[url].body.replace("alive: true,", "alive: 'latest',");
+  const pages = { [url]: { body: latest } };
+  const cache = new Map();
+  const gas = createGas({ members, pages, cache });
+  const status = JSON.parse(gas.context.doGet().text).data;
+  assert.equal(status.alive, 'latest', 'the published code runs, not the pasted one');
+  assert.match(status.version, /^[0-9a-f]{12}$/);
 
-  // Nothing new published: nothing to do.
-  gas.cache.clear();
-  const again = gas.context.selfUpdate(false);
-  assert.equal(again.updated, false);
-  assert.equal(gas.project.versions, 1);
+  // Claude publishes again and asks the script to pick it up; the next run uses it.
+  pages[url] = { body: latest.replace("alive: 'latest',", "alive: 'newer',") };
+  const refreshed = JSON.parse(gas.context.doPost({ postData: { contents: JSON.stringify({ action: 'refreshCode' }) } }).text);
+  assert.equal(refreshed.ok, true, refreshed.error);
+  assert.notEqual(refreshed.data.version, status.version);
+  const next = createGas({ members, pages, cache });
+  assert.equal(JSON.parse(next.context.doGet().text).data.alive, 'newer');
+  assert.equal(JSON.parse(next.context.doGet().text).data.version, refreshed.data.version);
 
-  // Something that isn't the wishlist script is never installed.
-  const broken = createGas({ members, pages: { ...published, 'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt': { body: '<html>404</html>' } } });
-  assert.throws(() => broken.context.selfUpdate(true), /не тот скрипт/);
-  assert.equal(broken.project.calls.length, 0);
+  // The app still works on the loaded code.
+  next.context.PropertiesService.getScriptProperties().setProperty('GROUP_CHAT_ID', '-100555');
+  assert.equal(next.call('list', {}, member).ok, true);
 
-  // Without the Apps Script API switched on, setup says where to switch it on.
-  const off = createGas({ members, pages: published });
-  off.project.apiEnabled = false;
-  assert.throws(() => off.context.selfUpdate(true), /script\.google\.com\/home\/usersettings/);
+  // A broken download or something that isn't the wishlist never replaces the working code.
+  for (const body of [latest.replace('function doPost(e) {', 'function doPost(e) {{'), '<html>404</html>']) {
+    const safe = createGas({ members, pages: { [url]: { body } } });
+    const data = JSON.parse(safe.context.doGet().text).data;
+    assert.deepEqual([data.alive, data.version], [true, 'pasted']);
+  }
+  // No internet: the pasted copy keeps working.
+  assert.equal(JSON.parse(createGas({ members }).context.doGet().text).data.version, 'pasted');
 });
