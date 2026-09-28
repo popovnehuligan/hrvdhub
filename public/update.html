@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Обновление вишлиста</title>
+    <link rel="icon" href="brand/eye.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .guide { max-width: 640px; margin: 0 auto; padding: 0 16px 60px; }
+      .guide ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; counter-reset: step; }
+      .guide ol > li { counter-increment: step; background: var(--surface); border-radius: var(--radius); box-shadow: inset 0 0 0 1.5px var(--line); padding: 16px 16px 16px 58px; position: relative; }
+      .guide ol > li::before { content: counter(step); position: absolute; left: 16px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: var(--ink-button); color: var(--on-ink-button); display: grid; place-items: center; font-weight: 800; }
+      .guide h2 { font-size: 17px; font-weight: 800; margin: 2px 0 6px; }
+      .guide p { margin: 6px 0; color: var(--text); }
+      .guide .button { margin-top: 8px; text-decoration: none; }
+      .guide .hint { color: var(--muted); font-size: 14px; }
+      .guide textarea { display: block; width: 100%; margin: 8px 0 2px; padding: 10px 14px; font: 600 13px ui-monospace, Menlo, monospace; color: var(--text); background: var(--surface); border: 1.5px solid var(--line); border-radius: 14px; }
+      .copied { color: var(--text); font-weight: 700; margin-left: 8px; }
+    </style>
+  </head>
+  <body>
+    <header class="top" style="margin: 0 0 18px">
+      <div class="top-brand"><span class="eye" aria-hidden="true"></span><span class="kicker">HOROVOD · Хаб</span></div>
+      <h1>Последнее ручное обновление</h1>
+      <p class="top-sub">Минут пять. После этого скрипт в Google будет обновляться сам, и Claude сможет выкладывать изменения без вас.</p>
+    </header>
+    <main class="guide">
+      <ol>
+        <li>
+          <h2>Разрешите скриптам обновляться</h2>
+          <p>Войдите как <b>horovod.info@gmail.com</b>, откройте страницу ниже и включите переключатель <b>Google Apps Script API</b>.</p>
+          <a class="button" href="https://script.google.com/home/usersettings" target="_blank" rel="noopener">Открыть настройки</a>
+        </li>
+        <li>
+          <h2>Покажите файл настроек проекта</h2>
+          <p>В Apps Script вишлиста слева нажмите ⚙️ <b>Project Settings</b> и поставьте галочку <b>Show "appsscript.json" manifest file in editor</b>.</p>
+        </li>
+        <li>
+          <h2>Вставьте скрипт</h2>
+          <button class="button primary" type="button" data-copy="setup/wishlist-script.txt">Скопировать скрипт</button><span class="copied"></span>
+          <textarea readonly hidden rows="5"></textarea>
+          <p>Слева нажмите <b>&lt;&gt; Editor</b>, откройте файл <b>Code.gs</b>, выделите всё (<b>Ctrl+A</b> / <b>⌘A</b>), вставьте (<b>Ctrl+V</b> / <b>⌘V</b>) и нажмите 💾.</p>
+          <p class="hint">Ключ бота вставлять не нужно: он уже сохранён в скрипте.</p>
+        </li>
+        <li>
+          <h2>Вставьте настройки проекта</h2>
+          <button class="button primary" type="button" data-copy="setup/appsscript.json">Скопировать настройки</button><span class="copied"></span>
+          <textarea readonly hidden rows="5"></textarea>
+          <p>Откройте файл <b>appsscript.json</b>, выделите всё, вставьте и нажмите 💾.</p>
+        </li>
+        <li>
+          <h2>Запустите setup</h2>
+          <p>Вверху выберите функцию <b>setup</b> и нажмите <b>Run</b>. Google попросит новые разрешения: <b>Review permissions</b> → horovod.info@gmail.com → <b>Advanced</b> → <b>Go to … (unsafe)</b> → <b>Allow</b>.</p>
+          <p>Внизу в логе должна быть строка <b>✓ Автообновление включено</b>. Нажимать Deploy не нужно: setup сам выложит новую версию.</p>
+          <p class="hint">Если в строке ✗, там написано, что сделать. Или пришлите скриншот Claude.</p>
+        </li>
+      </ol>
+    </main>
+    <script>
+      for (const button of document.querySelectorAll('[data-copy]')) {
+        const note = button.nextElementSibling;
+        const manual = note.nextElementSibling;
+        button.addEventListener('click', async () => {
+          let text;
+          try {
+            text = await (await fetch(button.dataset.copy, { cache: 'no-store' })).text();
+          } catch {
+            note.textContent = 'Не загрузилось. Проверьте интернет и нажмите ещё раз.';
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(text);
+            note.textContent = '✓ Скопировано';
+          } catch {
+            manual.hidden = false;
+            manual.value = text;
+            manual.select();
+            note.textContent = 'Выделено ниже: нажмите Ctrl+C / ⌘C.';
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

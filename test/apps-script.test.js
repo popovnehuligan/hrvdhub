@@ -24,6 +24,12 @@ const shop = {
   'https://shop.example/img/sm58.png': { body: png(), type: 'image/png' },
 };
 
+// What GitHub Pages serves: the script updates itself from these.
+const published = {
+  'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt': { body: fs.readFileSync('public/setup/wishlist-script.txt', 'utf8') },
+  'https://popovnehuligan.github.io/hrvdhub/setup/appsscript.json': { body: fs.readFileSync('public/setup/appsscript.json', 'utf8') },
+};
+
 const world = () => createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'yes' }, members, pages: shop });
 
 test('Shared.gs is up to date with public/lib/shared.js', () => {
@@ -171,7 +177,7 @@ test('setup does the whole bot: key, group, button, description, picture, remind
   const gas = createGas({
     props: { BOT_TOKEN: undefined },
     members,
-    pages: { 'https://popovnehuligan.github.io/hrvdhub/brand/bot-avatar.jpg': { body: avatar, type: 'image/jpeg' } },
+    pages: { ...published, 'https://popovnehuligan.github.io/hrvdhub/brand/bot-avatar.jpg': { body: avatar, type: 'image/jpeg' } },
   });
   delete gas.properties.BOT_TOKEN;
   gas.context.PASTED_BOT_TOKEN = '777:TEST-wishlist-token';
@@ -188,7 +194,9 @@ test('setup does the whole bot: key, group, button, description, picture, remind
   const photo = gas.sent('setMyProfilePhoto')[0].params;
   assert.deepEqual(JSON.parse(photo.photo), { type: 'static', photo: 'attach://avatar' });
   assert.equal(photo.avatar.getBytes().length, avatar.length, 'the picture itself is uploaded');
-  assert.deepEqual(gas.triggers.map((t) => [t.handler, t.hour]), [['dailyReminders', 10]]);
+  assert.deepEqual(gas.triggers.map((t) => [t.handler, t.hour ?? t.everyHours]), [['dailyReminders', 10], ['autoUpdate', 1]]);
+  assert.ok(report.some((line) => line.startsWith('✓ Автообновление')), report.join('\n'));
+  assert.equal(gas.project.deployments[1].deploymentConfig.versionNumber, 2, 'setup publishes the web app itself');
   assert.ok(report.some((line) => line.includes('HOROVOD')));
   assert.equal(gas.properties.TOPIC_ID, '77', 'found the Wishlist topic');
   assert.ok(report.some((line) => line.includes('«Wishlist»')));
@@ -201,7 +209,7 @@ test('setup does the whole bot: key, group, button, description, picture, remind
   assert.ok(!report.some((line) => line.startsWith('✗')), report.join('\n'));
 
   gas.context.setup();
-  assert.equal(gas.triggers.length, 1, 'running setup again does not double the reminder');
+  assert.equal(gas.triggers.length, 2, 'running setup again does not double the triggers');
   assert.equal(gas.sent('setMyProfilePhoto').length, 1, 'and does not upload the picture again');
 });
 
@@ -270,4 +278,34 @@ test('check() finds what is wrong and posts a test message', () => {
       : null) });
   report = moved.context.check();
   assert.equal(moved.properties.GROUP_CHAT_ID, '-100555', 'follows the group to its new address');
+});
+
+test('the script updates itself from GitHub Pages and republishes the web app', () => {
+  const gas = createGas({ members, pages: published });
+  const first = JSON.parse(gas.context.doPost({ postData: { contents: JSON.stringify({ action: 'refreshCode' }) } }).text);
+  assert.equal(first.ok, true, first.error);
+  assert.equal(first.data.updated, true);
+  assert.deepEqual(gas.project.files.map((f) => f.name), ['appsscript', 'Code']);
+  assert.equal(gas.project.files[1].source, published['https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt'].body);
+  assert.match(gas.project.files[0].source, /script\.deployments/, 'the manifest keeps the right to republish');
+  assert.equal(gas.project.calls[0].auth, 'Bearer oauth-token', 'as the owner of the script');
+  assert.equal(gas.project.deployments[1].deploymentConfig.versionNumber, 2, 'the live web app moves to the new version');
+  assert.deepEqual({ ...gas.project.deployments[0].deploymentConfig }, {}, '@HEAD is left alone');
+  assert.equal(JSON.parse(gas.context.doGet().text).data.version, first.data.version, 'the version is visible from outside');
+
+  // Nothing new published: nothing to do.
+  gas.cache.clear();
+  const again = gas.context.selfUpdate(false);
+  assert.equal(again.updated, false);
+  assert.equal(gas.project.versions, 1);
+
+  // Something that isn't the wishlist script is never installed.
+  const broken = createGas({ members, pages: { ...published, 'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt': { body: '<html>404</html>' } } });
+  assert.throws(() => broken.context.selfUpdate(true), /не тот скрипт/);
+  assert.equal(broken.project.calls.length, 0);
+
+  // Without the Apps Script API switched on, setup says where to switch it on.
+  const off = createGas({ members, pages: published });
+  off.project.apiEnabled = false;
+  assert.throws(() => off.context.selfUpdate(true), /script\.google\.com\/home\/usersettings/);
 });

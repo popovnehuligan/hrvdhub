@@ -79,6 +79,15 @@ paste `apps-script/Code.gs`, `apps-script/Shared.gs` and `appsscript.json` into 
 Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), and put the `…/exec`
 address into `public/config.js`.
 
+### The script updates itself
+
+After a one-time step (`public/update.html`: switch on the Apps Script API, paste the script and
+`appsscript.json`, run `setup`), the Google script keeps itself in step with GitHub Pages:
+every hour, and right away when asked with a POST `{"action":"refreshCode"}` to the web app,
+it downloads `setup/wishlist-script.txt` and `setup/appsscript.json`, replaces its own code, makes
+a new version and moves the web app to it. `GET …/exec` shows the version it runs
+(`CODE_HASH`: the first 12 hex digits of the SHA-256 of the script plus the manifest).
+
 ### When the bot is quiet in the group
 
 In the Apps Script editor pick the function `check` → Run. It checks the group, the topic and the

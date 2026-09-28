@@ -17,6 +17,11 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
   const telegram = [];
   const files = new Map();
   const triggers = [];
+  // The Apps Script API: the script's own files, versions and deployments.
+  const project = { files: [], versions: 0, deployments: [
+    { deploymentId: 'AKfyHEAD', deploymentConfig: {}, entryPoints: [{ entryPointType: 'WEB_APP' }] },
+    { deploymentId: 'AKfyLIVE', deploymentConfig: { versionNumber: 1 }, entryPoints: [{ entryPointType: 'WEB_APP' }] },
+  ], calls: [], apiEnabled: true };
   const sheets = new Map();
 
   function makeSheet(name) {
@@ -100,7 +105,23 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
         }
         return response(200, JSON.stringify({ ok: true, result: true }));
       }
-      const page = pages[url];
+      const api = url.match(/^https:\/\/script\.googleapis\.com\/v1\/projects\/(\w+)(\/.*)$/);
+      if (api) {
+        const method = (options.method || 'get').toLowerCase();
+        const body = options.payload ? JSON.parse(options.payload) : null;
+        project.calls.push({ method, path: api[2], body, auth: options.headers?.Authorization });
+        if (!project.apiEnabled) return response(403, JSON.stringify({ error: { message: 'User has not enabled the Apps Script API.' } }));
+        if (api[2] === '/content' && method === 'put') { project.files = body.files; return response(200, '{}'); }
+        if (api[2] === '/versions' && method === 'post') return response(200, JSON.stringify({ versionNumber: ++project.versions + 1 }));
+        if (api[2] === '/deployments' && method === 'get') return response(200, JSON.stringify({ deployments: project.deployments }));
+        const dep = api[2].match(/^\/deployments\/(\w+)$/);
+        if (dep && method === 'put') {
+          project.deployments.find((d) => d.deploymentId === dep[1]).deploymentConfig = body.deploymentConfig;
+          return response(200, '{}');
+        }
+        return response(404, '{}');
+      }
+      const page = pages[url.replace(/\?t=\d+$/, '')];
       if (!page) return response(404, 'not found');
       return response(page.status || 200, page.body, page.type);
     },
@@ -138,6 +159,9 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
         signed(crypto.createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),
       newBlob: blob,
       base64Decode: (s) => signed(Buffer.from(s, 'base64')),
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      Charset: { UTF_8: 'utf8' },
+      computeDigest: (algorithm, text) => signed(crypto.createHash(algorithm).update(String(text), 'utf8').digest()),
       formatDate: (date, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date),
     },
     UrlFetchApp,
@@ -151,11 +175,13 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (text) => ({ text, setMimeType() { return this; } }) },
     Session: { getScriptTimeZone: () => 'Europe/Bratislava' },
     ScriptApp: {
+      getScriptId: () => 'script123',
+      getOAuthToken: () => 'oauth-token',
       getProjectTriggers: () => triggers.slice(),
       deleteTrigger: (t) => triggers.splice(triggers.indexOf(t), 1),
       newTrigger(handler) {
         const t = { handler, getHandlerFunction: () => handler };
-        const chain = { timeBased: () => chain, atHour: (h) => ((t.hour = h), chain), everyDays: () => chain, inTimezone: () => chain, create: () => (triggers.push(t), t) };
+        const chain = { timeBased: () => chain, atHour: (h) => ((t.hour = h), chain), everyDays: () => chain, everyHours: (n) => ((t.everyHours = n), chain), inTimezone: () => chain, create: () => (triggers.push(t), t) };
         return chain;
       },
     },
@@ -170,5 +196,5 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
     return JSON.parse(out.text);
   }
 
-  return { context, call, properties, telegram, files, triggers, sheets, cache, sent: (m) => telegram.filter((c) => c.method === m) };
+  return { context, call, properties, telegram, files, triggers, project, sheets, cache, sent: (m) => telegram.filter((c) => c.method === m) };
 }
