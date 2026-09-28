@@ -2,7 +2,8 @@
 
 // Pure helpers shared by the Mini App (screens, demo mode) and the Google Apps Script
 // backend (tools/build-gs.mjs copies this file to apps-script/Shared.gs without the
-// `export` keywords). So: no DOM, no Node, no Intl or URL — plain JavaScript only.
+// `export` keywords). So: no DOM, no Node, no Intl or URL — plain JavaScript only, and
+// no syntax newer than Apps Script understands (no `1_000`, `??`, `?.`; test/apps-script.test.js checks).
 
 const CATEGORIES = [
   { id: 'hub', emoji: '🏠', label: 'Хаб' },
@@ -35,6 +36,11 @@ function plural(n, one, few, many) {
   if (last === 1) return one;
   if (last >= 2 && last <= 4) return few;
   return many;
+}
+
+/** `value`, or `fallback` when it's null/undefined (Google Apps Script can't parse `??`). */
+function orElse(value, fallback) {
+  return value == null ? fallback : value;
 }
 
 function findOption(list, id) {
@@ -104,7 +110,7 @@ function localToday() {
 }
 
 function daysBetween(from, to) {
-  return Math.round((toUTC(to) - toUTC(from)) / 86_400_000);
+  return Math.round((toUTC(to) - toUTC(from)) / 86400000);
 }
 
 function monthsBetween(from, to) {
@@ -117,7 +123,7 @@ function addMonths(date, n) {
 }
 
 function addDays(date, n) {
-  return fromUTC(toUTC(date) + n * 86_400_000);
+  return fromUTC(toUTC(date) + n * 86400000);
 }
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -215,7 +221,7 @@ function compareItems(sort) {
     schedule: [bySchedule, byPriority, byVotes, newest],
     votes: [byVotes, byPriority, newest],
     priority: [byPriority, bySchedule, byVotes, newest],
-    price: [(a, b) => (itemTotal(b) ?? -1) - (itemTotal(a) ?? -1), newest],
+    price: [(a, b) => orElse(itemTotal(b), -1) - orElse(itemTotal(a), -1), newest],
     newest: [newest],
   };
   const chain = chains[sort] || chains.schedule;
@@ -277,7 +283,7 @@ function groupBought(items) {
     key,
     title: key === '0000-00' ? 'Без даты' : formatMonth(`${key}-01`),
     items: groupItems,
-    ...sumTotals(groupItems, (item) => item.boughtPrice ?? itemTotal(item)),
+    ...sumTotals(groupItems, (item) => orElse(item.boughtPrice, itemTotal(item))),
   }));
 }
 
@@ -312,7 +318,7 @@ function text(value, label, max, required = false) {
 function money(value, label) {
   if (value === '' || value == null) return null;
   const number = typeof value === 'number' ? value : Number(String(value).replace(/\s/g, '').replace(',', '.'));
-  if (!Number.isFinite(number) || number < 0 || number > 10_000_000) throw new WishError(`${label}: неверное значение`);
+  if (!Number.isFinite(number) || number < 0 || number > 10000000) throw new WishError(`${label}: неверное значение`);
   return Math.round(number * 100) / 100;
 }
 
@@ -452,7 +458,7 @@ function publicWish(wish, userId, imageUrl) {
     votes: votes.length,
     voters: votes.map((vote) => vote.name),
     voted: votes.some((vote) => vote.id === userId),
-    mine: wish.createdBy?.id === userId,
+    mine: Boolean(wish.createdBy && wish.createdBy.id === userId),
   };
 }
 

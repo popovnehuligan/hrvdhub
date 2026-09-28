@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { createGas } from './gas-harness.js';
 
@@ -27,6 +28,23 @@ const world = () => createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME:
 
 test('Shared.gs is up to date with public/lib/shared.js', () => {
   execFileSync(process.execPath, ['tools/build-gs.mjs', '--check']);
+});
+
+test('the script uses only syntax Google Apps Script can parse', () => {
+  // Apps Script's editor rejects some newer JavaScript that Node accepts.
+  const code = fs.readFileSync('public/setup/wishlist-script.txt', 'utf8')
+    .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const [name, pattern] of [
+    ['numeric separators like 1_000', /\b\d+_\d/],
+    ['nullish coalescing ??', /\?\?/],
+    ['optional chaining ?.', /\?\.(?![0-9])/],
+    ['logical assignment ||= &&=', /(\|\||&&)=/],
+    ['private #fields', /(^|[^\w'"/&])#[a-z_]\w*\s*[=(;]/im],
+    ['import/export', /^\s*(import|export)\s/m],
+  ]) {
+    const match = code.match(pattern);
+    assert.equal(match, null, `${name}: …${match && code.slice(Math.max(0, match.index - 40), match.index + 20)}…`);
+  }
 });
 
 test('only signed Telegram users from the group get in', () => {
