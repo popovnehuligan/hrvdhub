@@ -12,6 +12,7 @@
  *                    setup() fills it in by itself if the bot has been added to exactly one group.
  *   ADMIN_IDS      — extra admins by Telegram id, comma separated (optional).
  *   NOTIFY_CHAT_ID — post news somewhere else than the group (optional).
+ *   TOPIC_ID       — the topic (in a group with topics) to post in; setup() finds it.
  *   APP_URL        — the app's address (default: GitHub Pages); setup() puts it on the bot's menu button.
  *   CURRENCY       — default EUR. REMINDER_HOUR — default 10.
  *
@@ -561,11 +562,29 @@ function planText(wish) {
 
 function notifyChat() { return prop('NOTIFY_CHAT_ID') || prop('GROUP_CHAT_ID') }
 
+/** Where posts go: the chat, plus the topic when the group has topics. */
+function target(chat) {
+  var params = { chat_id: chat };
+  if (prop('TOPIC_ID') && !prop('NOTIFY_CHAT_ID')) params.message_thread_id = Number(prop('TOPIC_ID'));
+  return params;
+}
+
+/** Sends to the topic; if the topic is gone, to the group's main chat, so nothing gets lost. */
+function sendTo(method, params) {
+  var result = tgTry(method, params);
+  if (!result.ok && params.message_thread_id && /thread|topic/i.test(result.description || '')) {
+    var plain = Object.assign({}, params);
+    delete plain.message_thread_id;
+    result = tgTry(method, plain);
+  }
+  return result;
+}
+
 /** Posts to the group with the picture and a button that opens the wish. Never breaks the save. */
 function post(wish, text) {
   var chat = notifyChat();
   if (!chat) return;
-  var params = { chat_id: chat, parse_mode: 'HTML' };
+  var params = Object.assign(target(chat), { parse_mode: 'HTML' });
   var button = openButton('item_' + wish.id, 'Открыть в вишлисте');
   if (button) params.reply_markup = button;
   try {
@@ -574,10 +593,10 @@ function post(wish, text) {
     if (drive) photo = DriveApp.getFileById(drive[1]).getBlob();
     else if (/^https:\/\//.test(wish.image || '')) photo = wish.image;
     if (photo) {
-      var sent = tgTry('sendPhoto', Object.assign({}, params, { photo: photo, caption: text }));
+      var sent = sendTo('sendPhoto', Object.assign({}, params, { photo: photo, caption: text }));
       if (sent.ok) return;
     }
-    tgTry('sendMessage', Object.assign({}, params, { text: text, link_preview_options: { is_disabled: true } }));
+    sendTo('sendMessage', Object.assign({}, params, { text: text, link_preview_options: { is_disabled: true } }));
   } catch (e) {
     console.warn('Не удалось написать в группу: ' + e.message);
   }
@@ -618,8 +637,9 @@ function dailyReminders() {
   var total = sumTotals(due).total;
   if (total) lines.push('', 'Итого: <b>' + formatMoney(total, currency()) + '</b>');
   refreshBotInfo();
-  tg('sendMessage', { chat_id: chat, text: shorten(lines.join('\n'), 4000), parse_mode: 'HTML',
-                      reply_markup: openButton('plan', 'Открыть план') });
+  var sent = sendTo('sendMessage', Object.assign(target(chat), { text: shorten(lines.join('\n'), 4000), parse_mode: 'HTML',
+                                                           reply_markup: openButton('plan', 'Открыть план') }));
+  if (!sent.ok) throw new Error('Telegram sendMessage: ' + (sent.description || sent.error_code));
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -663,6 +683,7 @@ function setup() {
   } else {
     report.push('✓ Группа: ' + prop('GROUP_CHAT_ID'));
   }
+  if (prop('GROUP_CHAT_ID')) report.push(findTopic());
 
   var appUrl = appUrlSetting();
   tg('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Вишлист', web_app: { url: appUrl } } });
@@ -710,6 +731,38 @@ function setBotPicture(appUrl) {
   } catch (e) {
     return '✗ Картинку бота поставить не вышло (' + e.message + '). Можно вручную: BotFather → /setuserpic, файл ' + appUrl + 'brand/bot-avatar.png';
   }
+}
+
+/**
+ * In a group with topics: the topic to post in. Found from a command sent to the bot inside
+ * that topic (bots see commands even with privacy mode on). A topic named like «Wishlist»
+ * wins; otherwise the only topic the bot was written to in.
+ */
+function findTopic() {
+  var group = String(prop('GROUP_CHAT_ID'));
+  var updates = tgTry('getUpdates', { allowed_updates: ['message', 'my_chat_member'] });
+  var topics = {}, order = [];
+  (updates.result || []).forEach(function (u) {
+    var m = u.message;
+    if (!m || String(m.chat.id) !== group || !m.chat.is_forum || !m.is_topic_message || !m.message_thread_id) return;
+    var created = m.reply_to_message && m.reply_to_message.forum_topic_created;
+    if (!topics[m.message_thread_id]) order.push(m.message_thread_id);
+    topics[m.message_thread_id] = created ? created.name : (topics[m.message_thread_id] || '');
+  });
+  var named = order.filter(function (id) { return /wish|вишлист|желан/i.test(topics[id]) });
+  var pick = named.length ? named[0] : order.length === 1 ? order[0] : null;
+  if (pick) {
+    setProp('TOPIC_ID', pick);
+    return '✓ Тема для сообщений: «' + (topics[pick] || pick) + '»';
+  }
+  if (prop('TOPIC_ID')) return '✓ Тема для сообщений: ' + prop('TOPIC_ID');
+  var forum = (updates.result || []).some(function (u) {
+    var chat = (u.message && u.message.chat) || (u.my_chat_member && u.my_chat_member.chat);
+    return chat && String(chat.id) === group && chat.is_forum;
+  });
+  return forum
+    ? '✗ Тема не найдена. В теме Wishlist отправьте /start@' + prop('BOT_USERNAME') + ' и запустите setup ещё раз'
+    : '• Сообщения пойдут в общий чат группы';
 }
 
 /** Groups the bot is in, from its recent updates (being added to a group is one). */

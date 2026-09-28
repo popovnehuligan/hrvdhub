@@ -190,6 +190,14 @@ test('setup does the whole bot: key, group, button, description, picture, remind
   assert.equal(photo.avatar.getBytes().length, avatar.length, 'the picture itself is uploaded');
   assert.deepEqual(gas.triggers.map((t) => [t.handler, t.hour]), [['dailyReminders', 10]]);
   assert.ok(report.some((line) => line.includes('HOROVOD')));
+  assert.equal(gas.properties.TOPIC_ID, '77', 'found the Wishlist topic');
+  assert.ok(report.some((line) => line.includes('«Wishlist»')));
+
+  // posts go into that topic
+  gas.properties.BOT_HAS_MAIN_APP = 'yes';
+  Object.assign(members, { 2: 'member' });
+  gas.call('create', { wish: { title: 'Кабели', link: 'https://shop.example/cables' } }, member);
+  assert.equal(gas.sent('sendMessage').at(-1).params.message_thread_id, 77);
   assert.ok(!report.some((line) => line.startsWith('✗')), report.join('\n'));
 
   gas.context.setup();

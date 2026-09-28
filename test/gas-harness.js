@@ -86,6 +86,8 @@ export function createGas({ props = {}, members = {}, pages = {} } = {}) {
             { update_id: 2, message: { chat: { id: 42, type: 'private' } } },
             { update_id: 3, my_chat_member: { chat: { id: -100777, type: 'group', title: 'Old test group' }, new_chat_member: { status: 'member' } } },
             { update_id: 4, my_chat_member: { chat: { id: -100777, type: 'group', title: 'Old test group' }, new_chat_member: { status: 'left' } } },
+            { update_id: 5, message: { chat: { id: -100555, type: 'supergroup', title: 'HOROVOD', is_forum: true }, text: '/start@horovod_wishlist_bot',
+              is_topic_message: true, message_thread_id: 77, reply_to_message: { message_id: 77, forum_topic_created: { name: 'Wishlist' } } } },
           ] }));
         }
         return response(200, JSON.stringify({ ok: true, result: true }));
