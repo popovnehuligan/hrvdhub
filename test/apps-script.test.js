@@ -330,3 +330,37 @@ test('a post that did not go through is sent again later, once', () => {
   gas.call('create', { wish: { title: 'Кабели', link: 'https://shop.example/cables' } }, member);
   assert.equal(gas.context.catchUpPosts(), 0, 'a wish posted right away is not posted again');
 });
+
+test('members of another group can come in once an admin adds the bot there', () => {
+  const inGroup = { '-100555': { 1: 'creator', 2: 'member' }, '-100888': { 5: 'member', 7: 'administrator' }, '-100999': { 6: 'member', 7: 'creator' } };
+  const updates = [
+    { update_id: 10, my_chat_member: { chat: { id: -100888, type: 'supergroup', title: 'HOROVOD Команда' }, from: { id: 1 }, new_chat_member: { status: 'member' } } },
+    { update_id: 11, my_chat_member: { chat: { id: -100999, type: 'group', title: 'Чужая группа' }, from: { id: 7 }, new_chat_member: { status: 'member' } } },
+  ];
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' },
+    tg: (method, params) => {
+      if (method === 'getUpdates') return { ok: true, result: updates };
+      if (method === 'getChatMember') {
+        const status = (inGroup[String(params.chat_id)] || {})[params.user_id];
+        return status ? { ok: true, result: { status } } : { ok: false, error_code: 400, description: 'Bad Request: PARTICIPANT_ID_INVALID' };
+      }
+      return null;
+    } });
+  const five = { id: 5, first_name: 'Ира' };
+  assert.equal(gas.call('list', {}, five).status, 403, 'not in the main group, not yet');
+  assert.match(gas.properties.DENIED, /PARTICIPANT_ID_INVALID/);
+
+  const groups = gas.context.learnGroups();
+  assert.deepEqual(Array.from(groups, (g) => g.title), ['HOROVOD Команда'], 'only the group an admin of the main group added the bot to');
+  assert.match(gas.sent('sendMessage').at(-1).params.text, /теперь могут открывать вишлист/);
+  gas.cache.clear();
+  const list = gas.call('list', {}, five);
+  assert.equal(list.ok, true, list.error);
+  assert.equal(list.data.me.isAdmin, false, 'admins of other groups are not wishlist admins');
+  assert.equal(gas.call('list', {}, { id: 6, first_name: 'Чужой' }).status, 403);
+
+  updates.push({ update_id: 12, my_chat_member: { chat: { id: -100888, type: 'supergroup', title: 'HOROVOD Команда' }, from: { id: 1 }, new_chat_member: { status: 'left' } } });
+  assert.equal(gas.context.learnGroups().length, 0, 'bot removed: the group no longer counts');
+  gas.cache.clear();
+  assert.equal(gas.call('list', {}, five).status, 403);
+});

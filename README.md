@@ -110,6 +110,7 @@ To change the picture: replace the files and bump `AVATAR_VERSION` in `apps-scri
 | `BOT_TOKEN` | **Required.** Lives only in the script's properties, never in the app or in git. |
 | `GROUP_CHAT_ID` | The HOROVOD group: its members can use the app, its admins are app admins. `setup()` fills it in. |
 | `ADMIN_IDS` | Extra admins by Telegram id, comma separated. |
+| `ACCESS_GROUPS` | Other groups whose members may use the app. Filled in by itself: when an admin of the main group adds the bot to another group, the hourly check notices it (and forgets the group when the bot is removed). |
 | `APP_URL` | The GitHub Pages address, for the bot's menu button. |
 | `NOTIFY_CHAT_ID` | Post news and reminders to another chat than the group. |
 | `CURRENCY`, `REMINDER_HOUR` | Default `EUR` and 10 (Bratislava time). |

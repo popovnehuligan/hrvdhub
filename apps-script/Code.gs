@@ -55,7 +55,7 @@ function doGet() {
       status: { group: Boolean(prop('GROUP_CHAT_ID')), topic: Boolean(prop('TOPIC_ID')), wishes: wishes.length,
                 posted: wishes.filter(function (w) { return w.postedAt }).length,
                 newestWish: newest, lastPostError: prop('LAST_POST_ERROR') || null,
-                extraAdmins: ids(prop('ADMIN_IDS')).length, denied: JSON.parse(prop('DENIED') || '{"count":0}') }
+                extraAdmins: ids(prop('ADMIN_IDS')).length, accessGroups: accessGroups().length, denied: JSON.parse(prop('DENIED') || '{"count":0}') }
     };
   });
 }
@@ -116,6 +116,37 @@ function auth(initData) {
   return user;
 }
 
+/** Other groups whose members may use the app: the ones an admin of the main group added the bot to. */
+function accessGroups() { return JSON.parse(prop('ACCESS_GROUPS') || '[]') }
+
+/**
+ * Hourly (autoUpdate): notices the bot being added to or removed from other groups. A group counts
+ * only if whoever added the bot is an admin of the main group, so strangers can't let themselves in.
+ */
+function learnGroups() {
+  var main = prop('GROUP_CHAT_ID');
+  if (!main) return accessGroups();
+  var updates = tgTry('getUpdates', { allowed_updates: ['message', 'my_chat_member'] });
+  var groups = accessGroups(), known = {};
+  groups.forEach(function (g) { known[g.id] = g });
+  (updates.result || []).forEach(function (u) {
+    var change = u.my_chat_member;
+    if (!change || !change.from || (change.chat.type !== 'group' && change.chat.type !== 'supergroup')) return;
+    var chatId = String(change.chat.id);
+    if (chatId === String(main)) return;
+    var status = change.new_chat_member.status;
+    if (status === 'left' || status === 'kicked') { delete known[chatId]; return }
+    if (known[chatId]) return;
+    var by = tgTry('getChatMember', { chat_id: main, user_id: change.from.id });
+    if (!by.ok || (by.result.status !== 'creator' && by.result.status !== 'administrator')) return;
+    known[chatId] = { id: chatId, title: change.chat.title || '' };
+    tgTry('sendMessage', { chat_id: chatId, text: 'Участники этой группы теперь могут открывать вишлист HOROVOD: кнопка «Вишлист» в чате с ботом.' });
+  });
+  var next = Object.keys(known).map(function (k) { return known[k] });
+  setProp('ACCESS_GROUPS', JSON.stringify(next));
+  return next;
+}
+
 function hex(bytes) {
   return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2) }).join('');
 }
@@ -132,14 +163,16 @@ function access(userId) {
   if (cached) return JSON.parse(cached);
 
   var result = { allowed: false, admin: false }, member = null;
-  if (ids(prop('ADMIN_IDS')).indexOf(id) >= 0) result = { allowed: true, admin: true };
+  if (ids(prop('ADMIN_IDS')).indexOf(id) >= 0) return { allowed: true, admin: true };
   var group = prop('GROUP_CHAT_ID');
-  if (!result.admin && group) {
-    member = tgTry('getChatMember', { chat_id: group, user_id: Number(id) });
+  // The main group first (its admins are the app's admins), then the other groups admins added the bot to.
+  var groups = group ? [group].concat(accessGroups().map(function (g) { return g.id })) : [];
+  for (var i = 0; i < groups.length && !result.allowed; i++) {
+    member = tgTry('getChatMember', { chat_id: groups[i], user_id: Number(id) });
     if (member.ok) {
       var status = member.result.status;
-      if (status === 'creator' || status === 'administrator') result = { allowed: true, admin: true };
-      else if (status === 'member' || (status === 'restricted' && member.result.is_member)) result = { allowed: true, admin: false };
+      var inGroup = status === 'creator' || status === 'administrator' || status === 'member' || (status === 'restricted' && member.result.is_member);
+      if (inGroup) result = { allowed: true, admin: i === 0 && (status === 'creator' || status === 'administrator') };
     } else if (member.error_code !== 400) {
       fail('Не удалось проверить участие через Telegram. Попробуйте чуть позже', 503);
     }
@@ -760,13 +793,14 @@ function checkCode(code) {
 function autoUpdate() {
   try { refreshCode() } catch (e) { console.warn('Автообновление: ' + e.message) }
   try { catchUpPosts() } catch (e) { console.warn('Досылка: ' + e.message) }
+  try { learnGroups() } catch (e) { console.warn('Группы: ' + e.message) }
 }
 
 function refreshNow() {
   var cache = CacheService.getScriptCache();
   if (cache.get('refreshing')) return { busy: true, version: runningVersion() };
   cache.put('refreshing', '1', 20);
-  return { version: refreshCode(), caughtUp: catchUpPosts() };
+  return { version: refreshCode(), caughtUp: catchUpPosts(), accessGroups: learnGroups().length };
 }
 
 function runningVersion() { return globalThis.WISHLIST_VERSION || 'pasted' }
