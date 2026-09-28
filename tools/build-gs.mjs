@@ -17,13 +17,21 @@ export function toAppsScript(code) {
 }
 
 const built = toAppsScript(source);
+// One file with everything, for copy-pasting into the Apps Script editor (public/setup.html).
+const bundleTarget = path.join(root, 'public/setup/wishlist-script.txt');
+const bundle = `${built}\n\n${fs.readFileSync(path.join(root, 'apps-script/Code.gs'), 'utf8')}`;
+
 if (process.argv.includes('--check')) {
-  const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-  if (current !== built) {
-    console.error('apps-script/Shared.gs is out of date: run node tools/build-gs.mjs');
-    process.exit(1);
+  for (const [file, expected] of [[target, built], [bundleTarget, bundle]]) {
+    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (current !== expected) {
+      console.error(`${path.relative(root, file)} is out of date: run node tools/build-gs.mjs`);
+      process.exit(1);
+    }
   }
 } else {
   fs.writeFileSync(target, built);
-  console.log('apps-script/Shared.gs written');
+  fs.mkdirSync(path.dirname(bundleTarget), { recursive: true });
+  fs.writeFileSync(bundleTarget, bundle);
+  console.log('apps-script/Shared.gs and public/setup/wishlist-script.txt written');
 }
