@@ -54,7 +54,8 @@ function doGet() {
       alive: true, version: runningVersion(), ts: new Date().toISOString(),
       status: { group: Boolean(prop('GROUP_CHAT_ID')), topic: Boolean(prop('TOPIC_ID')), wishes: wishes.length,
                 posted: wishes.filter(function (w) { return w.postedAt }).length,
-                newestWish: newest, lastPostError: prop('LAST_POST_ERROR') || null }
+                newestWish: newest, lastPostError: prop('LAST_POST_ERROR') || null,
+                extraAdmins: ids(prop('ADMIN_IDS')).length, denied: JSON.parse(prop('DENIED') || '{"count":0}') }
     };
   });
 }
@@ -130,11 +131,11 @@ function access(userId) {
   var cached = cache.get('access:' + id);
   if (cached) return JSON.parse(cached);
 
-  var result = { allowed: false, admin: false };
+  var result = { allowed: false, admin: false }, member = null;
   if (ids(prop('ADMIN_IDS')).indexOf(id) >= 0) result = { allowed: true, admin: true };
   var group = prop('GROUP_CHAT_ID');
   if (!result.admin && group) {
-    var member = tgTry('getChatMember', { chat_id: group, user_id: Number(id) });
+    member = tgTry('getChatMember', { chat_id: group, user_id: Number(id) });
     if (member.ok) {
       var status = member.result.status;
       if (status === 'creator' || status === 'administrator') result = { allowed: true, admin: true };
@@ -144,6 +145,14 @@ function access(userId) {
     }
   }
   if (!group && !ids(prop('ADMIN_IDS')).length) fail('Вишлист ещё не настроен: запустите setup() в Apps Script', 503);
+  if (!result.allowed) {
+    // For check-ups from outside (doGet): how many were turned away and why, never who.
+    var denied = JSON.parse(prop('DENIED') || '{"count":0}');
+    denied.count++;
+    denied.last = new Date().toISOString();
+    denied.reason = member ? (member.ok ? 'status ' + member.result.status : String(member.description || member.error_code)) : 'no group';
+    setProp('DENIED', JSON.stringify(denied));
+  }
   cache.put('access:' + id, JSON.stringify(result), result.allowed ? 600 : 60);
   return result;
 }
