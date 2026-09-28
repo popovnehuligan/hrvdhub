@@ -11,7 +11,7 @@ const toBytes = (data) => (typeof data === 'string' ? signed(Buffer.from(data, '
 
 export const BOT_TOKEN = '777:TEST-wishlist-token';
 
-export function createGas({ props = {}, members = {}, pages = {} } = {}) {
+export function createGas({ props = {}, members = {}, pages = {}, tg = () => null } = {}) {
   const properties = { BOT_TOKEN, ...props };
   const cache = new Map();
   const telegram = [];
@@ -74,12 +74,20 @@ export function createGas({ props = {}, members = {}, pages = {} } = {}) {
       const tgMatch = url.match(/^https:\/\/api\.telegram\.org\/bot([^/]+)\/(\w+)$/);
       if (tgMatch) {
         const params = options.contentType === 'application/json' ? JSON.parse(options.payload) : options.payload;
+        if (options.contentType !== 'application/json') {
+          // Like Google's: a form takes only text and files.
+          for (const [key, value] of Object.entries(params)) {
+            if (typeof value !== 'string' && typeof value?.getBytes !== 'function') throw new Error(`Invalid argument: ${key}`);
+          }
+        }
         telegram.push({ method: tgMatch[2], params });
+        const custom = tg(tgMatch[2], params);
+        if (custom) return response(200, JSON.stringify(custom));
         if (tgMatch[2] === 'getChatMember') {
           const status = members[params.user_id];
           return response(200, JSON.stringify(status ? { ok: true, result: { status } } : { ok: false, error_code: 400, description: 'Bad Request: user not found' }));
         }
-        if (tgMatch[2] === 'getMe') return response(200, JSON.stringify({ ok: true, result: { username: 'horovod_wishlist_bot', first_name: 'HOROVOD Вишлист', has_main_web_app: Boolean(properties.TEST_HAS_MAIN_APP) } }));
+        if (tgMatch[2] === 'getMe') return response(200, JSON.stringify({ ok: true, result: { id: 777, username: 'horovod_wishlist_bot', first_name: 'HOROVOD Вишлист', has_main_web_app: Boolean(properties.TEST_HAS_MAIN_APP) } }));
         if (tgMatch[2] === 'getUpdates') {
           return response(200, JSON.stringify({ ok: true, result: [
             { update_id: 1, my_chat_member: { chat: { id: -100555, type: 'supergroup', title: 'HOROVOD' }, new_chat_member: { status: 'member' } } },

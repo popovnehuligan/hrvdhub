@@ -225,3 +225,49 @@ test('parses shop pages: Open Graph, JSON-LD, relative addresses', () => {
   assert.equal(context.resolveUrl('https://shop.example/a/b?x=1', 'img.png'), 'https://shop.example/a/img.png');
   assert.equal(context.parsePrice('1.299'), 1299);
 });
+
+test('a wish with a photo is posted into the topic', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', TOPIC_ID: '77', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'yes' }, members, pages: shop });
+  const created = gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  assert.equal(created.ok, true, created.error);
+  const posted = gas.sent('sendPhoto').at(-1).params;
+  assert.equal(posted.message_thread_id, '77', 'the topic goes along with the uploaded photo');
+  assert.equal(typeof posted.photo.getBytes, 'function');
+  assert.equal(gas.sent('sendMessage').length, 0, 'one post, not two');
+});
+
+test('if Telegram refuses the photo, the wish is posted as text, and the error is kept', () => {
+  const refuse = { ok: false, error_code: 400, description: 'Bad Request: not enough rights to send photos to the chat' };
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
+                          tg: (method) => (method === 'sendPhoto' ? refuse : null) });
+  assert.equal(gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member).ok, true);
+  assert.match(gas.sent('sendMessage').at(-1).params.text, /Микрофон/);
+  assert.equal(gas.properties.LAST_POST_ERROR, '');
+
+  const silent = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
+                             tg: (method) => (/^send/.test(method) ? refuse : null) });
+  assert.equal(silent.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member).ok, true, 'the wish is saved anyway');
+  assert.match(silent.properties.LAST_POST_ERROR, /not enough rights/);
+});
+
+test('check() finds what is wrong and posts a test message', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', TOPIC_ID: '77', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
+                          tg: (method, params) => (method === 'getChat' ? { ok: true, result: { id: params.chat_id, title: 'HOROVOD', is_forum: true } } : null) });
+  let report = gas.context.check();
+  assert.ok(report.some((line) => /нет ни одного желания/.test(line)), report.join('\n'));
+  assert.equal(gas.sent('sendMessage').at(-1).params.message_thread_id, 77);
+
+  gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  report = gas.context.check();
+  assert.ok(report.some((line) => line.includes('«Микрофон»')));
+  assert.ok(report.some((line) => line.startsWith('✓ Тестовое сообщение')), report.join('\n'));
+  assert.match(gas.sent('sendPhoto').at(-1).params.caption, /Проверка связи/);
+
+  const moved = createGas({ props: { GROUP_CHAT_ID: '-555' }, members,
+    tg: (method, params) => (method === 'getChat'
+      ? (params.chat_id === '-555' ? { ok: false, error_code: 400, description: 'Bad Request: group chat was upgraded to a supergroup chat', parameters: { migrate_to_chat_id: -100555 } }
+                                   : { ok: true, result: { title: 'HOROVOD' } })
+      : null) });
+  report = moved.context.check();
+  assert.equal(moved.properties.GROUP_CHAT_ID, '-100555', 'follows the group to its new address');
+});

@@ -264,6 +264,23 @@ function planText(plan) {
   return plan.tone === 'nodate' ? ' · дата не выбрана' : ` · ${plan.detail}`;
 }
 
+const SVG = 'http://www.w3.org/2000/svg';
+
+/** The vote heart: a rounded, slightly chunky outline that fills in once you've voted. */
+function heartIcon() {
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'heart');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(SVG, 'path');
+  path.setAttribute(
+    'd',
+    'M12 20.2c-.3 0-.6-.1-.8-.3C7.4 16.8 3.2 13.4 3.2 8.9 3.2 6.1 5.3 4 7.9 4c1.7 0 3.2.9 4.1 2.3C12.9 4.9 14.4 4 16.1 4c2.6 0 4.7 2.1 4.7 4.9 0 4.5-4.2 7.9-8 11-.2.2-.5.3-.8.3Z',
+  );
+  svg.append(path);
+  return svg;
+}
+
 function voteButton(item, { withLabel = false } = {}) {
   return h(
     'button',
@@ -274,7 +291,8 @@ function voteButton(item, { withLabel = false } = {}) {
       'aria-label': item.voted ? 'Убрать голос' : 'Проголосовать',
       onclick: stop(() => toggleVote(item)),
     },
-    withLabel ? h('span', {}, item.voted ? 'Вы за' : 'Голосовать') : h('span', { class: 'vote-plus' }, '+1'),
+    heartIcon(),
+    withLabel ? h('span', {}, item.voted ? 'Вам нравится' : 'Нравится') : null,
     item.votes ? h('span', { class: 'vote-count' }, item.votes) : null,
   );
 }

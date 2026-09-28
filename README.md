@@ -21,7 +21,7 @@ bot, inside Telegram. The app and the bot's messages are in Russian.
   overall.
 
 **Team**
-- 👍 **Votes** show what people want most; the details show who voted.
+- ♥ **Hearts** (votes) show what people want most; the details show who liked it.
 - **Bought** records the price actually paid and the date. The Bought tab shows spending per month
   and for the year. Wishes you decide against can be **dropped** and brought back later.
 - Search, category filters, and sorting by buy date, votes, priority, price or newest.
@@ -78,6 +78,12 @@ Without step 2's script you can do the same by hand, as in the bar bot's README:
 paste `apps-script/Code.gs`, `apps-script/Shared.gs` and `appsscript.json` into its Apps Script,
 Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), and put the `…/exec`
 address into `public/config.js`.
+
+### When the bot is quiet in the group
+
+In the Apps Script editor pick the function `check` → Run. It checks the group, the topic and the
+bot's rights, fixes a group that changed its address, shows the last error Telegram gave, and posts
+a test message about the newest wish. The log says what's wrong in plain words.
 
 ### The bot's look
 

@@ -507,7 +507,8 @@ function tgTry(method, payload) {
     Object.keys(payload).forEach(function (k) {
       var v = payload[k];
       if (v == null) return;
-      form[k] = typeof v === 'object' && typeof v.getBytes !== 'function' ? JSON.stringify(v) : v;
+      // A form takes only text and files: numbers (like the topic's id) must become text too.
+      form[k] = typeof v.getBytes === 'function' ? v : typeof v === 'object' ? JSON.stringify(v) : String(v);
     });
     options.payload = form;
   } else {
@@ -580,26 +581,39 @@ function sendTo(method, params) {
   return result;
 }
 
-/** Posts to the group with the picture and a button that opens the wish. Never breaks the save. */
+/**
+ * Posts to the group with the picture and a button that opens the wish. Never breaks the save:
+ * without the picture it tries plain text, and a failure is kept in LAST_POST_ERROR for check().
+ */
 function post(wish, text) {
   var chat = notifyChat();
-  if (!chat) return;
+  if (!chat) return { ok: false, description: 'группа не задана (GROUP_CHAT_ID)' };
   var params = Object.assign(target(chat), { parse_mode: 'HTML' });
   var button = openButton('item_' + wish.id, 'Открыть в вишлисте');
   if (button) params.reply_markup = button;
+  var result = null;
   try {
     var photo = null;
     var drive = /^drive:(.+)$/.exec(wish.image || '');
     if (drive) photo = DriveApp.getFileById(drive[1]).getBlob();
     else if (/^https:\/\//.test(wish.image || '')) photo = wish.image;
-    if (photo) {
-      var sent = sendTo('sendPhoto', Object.assign({}, params, { photo: photo, caption: text }));
-      if (sent.ok) return;
-    }
-    sendTo('sendMessage', Object.assign({}, params, { text: text, link_preview_options: { is_disabled: true } }));
+    if (photo) result = sendTo('sendPhoto', Object.assign({}, params, { photo: photo, caption: shorten(text, 1000) }));
   } catch (e) {
-    console.warn('Не удалось написать в группу: ' + e.message);
+    result = { ok: false, description: e.message };
   }
+  if (!result || !result.ok) {
+    try {
+      result = sendTo('sendMessage', Object.assign({}, params, { text: text, link_preview_options: { is_disabled: true } }));
+    } catch (e) {
+      result = { ok: false, description: e.message };
+    }
+  }
+  if (result.ok) setProp('LAST_POST_ERROR', '');
+  else {
+    console.warn('Не удалось написать в группу: ' + result.description);
+    setProp('LAST_POST_ERROR', Utilities.formatDate(new Date(), timeZone(), 'dd.MM HH:mm') + ' — ' + (result.description || result.error_code));
+  }
+  return result;
 }
 
 function notify(kind, wish) {
@@ -619,7 +633,7 @@ function notify(kind, wish) {
     lines = ['<b>Куплено</b>: ' + escapeHtml(wish.title)];
     if (paid != null) lines.push('Оплачено: ' + formatMoney(paid, wish.currency));
   }
-  post(wish, lines.join('\n'));
+  return post(wish, lines.join('\n'));
 }
 
 /** Runs every morning (setup() installs the trigger): one message about purchases that are due. */
@@ -705,6 +719,64 @@ function setup() {
   if (me.has_main_web_app) report.push('✓ Кнопки в группе открывают нужное желание сразу');
   else report.push('• Кнопки в группе открывают чат с ботом. Чтобы они открывали желание сразу: BotFather → бот → Bot Settings → Configure Mini App → Enable, адрес ' + appUrl);
 
+  report.forEach(function (line) { Logger.log(line) });
+  return report;
+}
+
+/**
+ * Run from the Apps Script editor when the bot is quiet in the group. Checks the group, the topic
+ * and the bot's rights, fixes what it can, and posts a test message about the newest wish.
+ */
+function check() {
+  var report = [];
+  var me = refreshBotInfo();
+  report.push('✓ Бот: @' + me.username);
+  var group = prop('GROUP_CHAT_ID');
+  if (!group) {
+    report.push('✗ Группа не задана: добавьте бота в группу, напишите в теме Wishlist /start@' + me.username + ' и запустите setup');
+    report.forEach(function (line) { Logger.log(line) });
+    return report;
+  }
+  var chat = tgTry('getChat', { chat_id: group });
+  var moved = chat.parameters && chat.parameters.migrate_to_chat_id;
+  if (moved) {
+    // The group became a supergroup and got a new id.
+    setProp('GROUP_CHAT_ID', moved);
+    group = String(moved);
+    chat = tgTry('getChat', { chat_id: group });
+    report.push('✓ Группа сменила адрес (стала супергруппой), исправил');
+  }
+  if (!chat.ok) report.push('✗ Бот не видит группу (' + chat.description + '). Добавьте его в группу снова и запустите setup');
+  else report.push('✓ Группа: «' + chat.result.title + '»' + (chat.result.is_forum ? ', с темами' : ''));
+
+  var self = tgTry('getChatMember', { chat_id: group, user_id: me.id });
+  if (self.ok) {
+    var status = self.result.status;
+    if (status === 'left' || status === 'kicked') report.push('✗ Бота нет в группе. Добавьте его снова');
+    else if (status === 'restricted' && (self.result.can_send_messages === false || self.result.can_send_photos === false)) {
+      report.push('✗ Боту запрещено писать или отправлять фото в группе. Разрешите в настройках группы → Участники → бот');
+    } else report.push('✓ Бот в группе' + (status === 'administrator' ? ' (админ)' : ''));
+  }
+
+  if (prop('NOTIFY_CHAT_ID')) report.push('• Сообщения идут в отдельный чат NOTIFY_CHAT_ID = ' + prop('NOTIFY_CHAT_ID'));
+  else if (prop('TOPIC_ID')) report.push('✓ Тема для сообщений: ' + prop('TOPIC_ID'));
+  else if (chat.ok && chat.result.is_forum) report.push(findTopic());
+
+  if (prop('LAST_POST_ERROR')) report.push('• Последняя ошибка при отправке: ' + prop('LAST_POST_ERROR'));
+
+  var wishes = readWishes().filter(function (w) { return w.status !== 'dropped' });
+  wishes.sort(function (a, b) { return String(b.createdAt || '').localeCompare(String(a.createdAt || '')) });
+  var sent;
+  if (wishes.length) {
+    report.push('✓ Желаний в таблице: ' + wishes.length + ', последнее: «' + wishes[0].title + '»');
+    sent = post(wishes[0], '<b>Проверка связи</b>: так бот пишет о новых желаниях.\n<b>' + escapeHtml(wishes[0].title) + '</b>');
+  } else {
+    report.push('✗ В таблице нет ни одного желания. Если вы уже добавляли желание, оно осталось только в телефоне: ' +
+                'приложение было в демо-режиме (внизу списка надпись «Демо-режим»). Закройте мини-приложение и откройте снова');
+    sent = sendTo('sendMessage', Object.assign(target(notifyChat()), { text: 'Проверка связи: вишлист будет писать сюда.' }));
+  }
+  report.push(sent.ok ? '✓ Тестовое сообщение отправлено — посмотрите в группу'
+                      : '✗ Тестовое сообщение не ушло: ' + (sent.description || sent.error_code));
   report.forEach(function (line) { Logger.log(line) });
   return report;
 }

@@ -31,6 +31,12 @@ jobs:
           node-version: 22
       - name: Tests
         run: npm test
+      - name: Stamp file versions
+        # Telegram keeps old copies of the app; a new address per publish makes it load the new files.
+        run: |
+          v=${GITHUB_SHA::8}
+          sed -i -E "s#(src|href)=\"(config\.js|styles\.css|app\.js)\"#\1=\"\2?v=$v\"#g" public/index.html
+          find public -name '*.js' -not -path 'public/setup/*' -exec sed -i -E "s#(from '\.\.?/[^']+\.js)'#\1?v=$v'#g" {} +
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
