@@ -432,13 +432,15 @@ function canEditWish(wish, { userId, isAdmin }) {
   return isAdmin || (wish.createdBy && wish.createdBy.id === userId && wish.status === 'wanted');
 }
 
-/** Applies an edit, enforcing "a photo or a link". Returns { wish, becamePlanned, becameBought }. */
+/** Applies an edit, enforcing "a photo or a link". Returns { wish, becamePlanned, planMoved, becameBought }. */
 function applyWishPatch(wish, patch, now = new Date().toISOString()) {
   const next = { ...wish, ...patch, updatedAt: now };
   if (!next.link && !next.image) throw new WishError('Добавьте фото или ссылку');
+  const stillPlanned = wish.planned && next.planned && next.status === 'wanted';
   return {
     wish: next,
     becamePlanned: !wish.planned && next.planned && next.status === 'wanted',
+    planMoved: stillPlanned && (wish.plannedDate !== next.plannedDate || wish.plannedPrecision !== next.plannedPrecision),
     becameBought: wish.status !== 'bought' && next.status === 'bought',
   };
 }

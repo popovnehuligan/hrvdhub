@@ -86,7 +86,9 @@ test('a wish needs a photo or a link; a link brings its picture from the shop', 
 
   const posted = gas.sent('sendPhoto')[0];
   assert.equal(posted.params.chat_id, '-100555');
-  assert.match(posted.params.caption, /Настя<\/b> добавил\(а\) желание/);
+  assert.match(posted.params.caption, /^🆕 <b>НОВОЕ ЖЕЛАНИЕ<\/b>\n\n<b>Микрофон<\/b>/);
+  assert.match(posted.params.caption, /Добавил\(а\): Настя$/);
+  assert.equal(created.data.posted, true, 'the app hears that the post went out');
   assert.equal(typeof posted.params.photo.getBytes, 'function', 'the photo itself is sent');
 
   const row = gas.sheets.get('wishes').rows[1];
@@ -118,16 +120,37 @@ test('only admins plan and buy, and the group hears about it', () => {
 
   assert.equal(gas.call('update', { id, patch: { planned: true } }, member).status, 403);
 
+  const card = gas.sent('sendMessage').at(-1).params; // the new-wish card (no picture in this shop)
+  assert.match(card.text, /^🆕 <b>НОВОЕ ЖЕЛАНИЕ<\/b>/);
+
   const planned = gas.call('update', { id, patch: { planned: true, plannedDate: '2026-11-17', plannedPrecision: 'month' } }, admin);
   assert.equal(planned.data.item.plannedDate, '2026-11-01');
+  assert.equal(planned.data.posted, true);
   const message = gas.sent('sendMessage').at(-1).params;
-  assert.match(message.text, /Планируем купить<\/b>: Малый барабан/);
-  assert.match(message.text, /Ноябрь 2026/);
-  assert.equal(message.reply_markup.inline_keyboard[0][0].url, `https://t.me/horovod_wishlist_bot?startapp=item_${id}`);
+  assert.match(message.text, /^📅 <b>ПЛАНИРУЕМ КУПИТЬ<\/b>\n\n<b>Малый барабан<\/b>\nКогда: <b>.*Ноябрь 2026/);
+  assert.match(message.text, /Запланировал\(а\): Миша$/);
+  assert.equal(message.reply_markup.inline_keyboard[0][0].url, 'https://t.me/horovod_wishlist_bot?startapp=plan');
+
+  const moved = gas.call('update', { id, patch: { planned: true, plannedDate: '2026-12-05', plannedPrecision: 'day' } }, admin);
+  assert.equal(moved.data.posted, true);
+  assert.match(gas.sent('sendMessage').at(-1).params.text, /^📅 <b>ПЕРЕНЕСЛИ ПОКУПКУ<\/b>[\s\S]*Перенёс\(ла\): Миша$/);
+  assert.equal(gas.call('update', { id, patch: { note: 'Ludwig' } }, admin).data.posted, null, 'a plain edit posts nothing');
 
   const bought = gas.call('update', { id, patch: { status: 'bought', boughtPrice: '149,9', boughtAt: '2026-11-20' } }, admin);
   assert.equal(bought.data.item.boughtPrice, 149.9);
-  assert.match(gas.sent('sendMessage').at(-1).params.text, /Куплено<\/b>: Малый барабан\nОплачено: 149,90/);
+  assert.match(gas.sent('sendMessage').at(-1).params.text, /^✅ <b>КУПЛЕНО<\/b>\n\n<b>Малый барабан<\/b>\nОплачено: 149,90[\s\S]*Отметил\(а\): Миша$/);
+});
+
+test('planned and bought posts reply to the wish card without repeating the picture', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', TOPIC_ID: '77', BOT_USERNAME: 'horovod_wishlist_bot', BOT_HAS_MAIN_APP: 'yes' }, members, pages: shop,
+                          tg: (method) => (/^send/.test(method) ? { ok: true, result: { message_id: 501 } } : null) });
+  const id = gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member).data.item.id;
+  assert.equal(gas.sent('sendPhoto').length, 1, 'the new wish is a picture card');
+  gas.call('update', { id, patch: { planned: true, plannedDate: null, plannedPrecision: null } }, admin);
+  assert.equal(gas.sent('sendPhoto').length, 1, 'the plan is not a second picture');
+  const reply = gas.sent('sendMessage').at(-1).params;
+  assert.equal(reply.reply_parameters.message_id, 501);
+  assert.equal(reply.message_thread_id, 77);
 });
 
 test('members change only their own wishes; votes toggle', () => {

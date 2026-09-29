@@ -964,6 +964,13 @@ select:focus {
   animation: spin 0.8s linear infinite;
 }
 
+.spinner.small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  vertical-align: -2px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1212,6 +1219,33 @@ select:focus {
   text-align: center;
 }
 
+.chip:disabled:not(.selected) {
+  opacity: 0.45;
+}
+
+.chip .spinner.small {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: currentColor;
+}
+
+.plan-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.plan-done {
+  margin: 10px 0 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.plan-done.warn {
+  color: var(--red);
+}
+
 .chip.wide {
   white-space: normal;
   padding: 11px 14px;
@@ -1415,9 +1449,10 @@ select:focus {
   left: 50%;
   bottom: calc(90px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   transform: translate(-50%, 10px);
+  width: max-content;
   max-width: min(92vw, 420px);
   padding: 11px 18px;
-  border-radius: 999px;
+  border-radius: 18px;
   background: var(--charcoal);
   color: var(--cream);
   font-size: 14px;

@@ -432,13 +432,15 @@ function canEditWish(wish, { userId, isAdmin }) {
   return isAdmin || (wish.createdBy && wish.createdBy.id === userId && wish.status === 'wanted');
 }
 
-/** Applies an edit, enforcing "a photo or a link". Returns { wish, becamePlanned, becameBought }. */
+/** Applies an edit, enforcing "a photo or a link". Returns { wish, becamePlanned, planMoved, becameBought }. */
 function applyWishPatch(wish, patch, now = new Date().toISOString()) {
   const next = { ...wish, ...patch, updatedAt: now };
   if (!next.link && !next.image) throw new WishError('Добавьте фото или ссылку');
+  const stillPlanned = wish.planned && next.planned && next.status === 'wanted';
   return {
     wish: next,
     becamePlanned: !wish.planned && next.planned && next.status === 'wanted',
+    planMoved: stillPlanned && (wish.plannedDate !== next.plannedDate || wish.plannedPrecision !== next.plannedPrecision),
     becameBought: wish.status !== 'bought' && next.status === 'bought',
   };
 }
@@ -707,8 +709,8 @@ function handle(action, p, user) {
       if (wish.link && !wish.image) attachLinkImage(wish);
       saveWish(wish);
       if (rid) cache.put(rid, wish.id, 21600);
-      announce(wish);
-      return { item: view(user)(wish) };
+      var announced = announce(wish);
+      return { item: view(user)(wish), posted: Boolean(announced && announced.ok) };
     }
 
     var current = findWish(p.id);
@@ -726,9 +728,9 @@ function handle(action, p, user) {
       var next = result.wish;
       if (next.link && !next.image && next.link !== current.link) attachLinkImage(next);
       saveWish(next);
-      if (result.becamePlanned) notify('planned', next);
-      if (result.becameBought) notify('bought', next);
-      return { item: view(user)(next) };
+      var kind = result.becameBought ? 'bought' : result.becamePlanned ? 'planned' : result.planMoved ? 'moved' : null;
+      var sent = kind ? notify(kind, next, user) : null;
+      return { item: view(user)(next), posted: sent ? Boolean(sent.ok) : null };
     }
     if (action === 'delete') {
       if (!canEditWish(current, ctx)) fail('Можно удалять только свои желания', 403);
@@ -1123,21 +1125,30 @@ function sendTo(method, params) {
 }
 
 /**
- * Posts to the group with the picture and a button that opens the wish. Never breaks the save:
- * without the picture it tries plain text, and a failure is kept in LAST_POST_ERROR for check().
+ * Posts to the group. A new wish comes as a picture card; planned, moved and bought come as short
+ * text replies to that card, so the three kinds look different and stay tied to the wish.
+ * Never breaks the save: without the picture it tries plain text, and a failure is kept in
+ * LAST_POST_ERROR for check().
  */
-function post(wish, text) {
+function post(wish, text, options) {
+  options = options || {};
   var chat = notifyChat();
   if (!chat) return { ok: false, description: 'группа не задана (GROUP_CHAT_ID)' };
   var params = Object.assign(target(chat), { parse_mode: 'HTML' });
-  var button = openButton('item_' + wish.id, 'Открыть в вишлисте');
+  var button = openButton(options.start === 'plan' ? 'plan' : 'item_' + wish.id, options.button || 'Открыть в вишлисте');
   if (button) params.reply_markup = button;
+  if (options.reply && wish.postMessageId) {
+    params.reply_parameters = { message_id: Number(wish.postMessageId), allow_sending_without_reply: true };
+  }
   var result = null;
   try {
     var photo = null;
     var drive = /^drive:(.+)$/.exec(wish.image || '');
-    if (drive) photo = DriveApp.getFileById(drive[1]).getBlob();
-    else if (/^https:\/\//.test(wish.image || '')) photo = wish.image;
+    // A reply points at the card with the picture already; the picture again would only repeat it.
+    if (!params.reply_parameters) {
+      if (drive) photo = DriveApp.getFileById(drive[1]).getBlob();
+      else if (/^https:\/\//.test(wish.image || '')) photo = wish.image;
+    }
     if (photo) result = sendTo('sendPhoto', Object.assign({}, params, { photo: photo, caption: shorten(text, 1000) }));
   } catch (e) {
     result = { ok: false, description: e.message };
@@ -1157,30 +1168,44 @@ function post(wish, text) {
   return result;
 }
 
-function notify(kind, wish) {
-  var lines;
+/**
+ * The group's posts. Each kind opens with its own marker line in capitals, so they are told apart
+ * at a glance: 🆕 new wish (a picture card), 📅 planned or moved, ✅ bought (replies to the card).
+ */
+function notify(kind, wish, actor) {
+  var who = actor ? escapeHtml(userRef(actor).name) : '';
+  var title = '<b>' + escapeHtml(wish.title) + '</b>';
+  var lines, options = {};
   if (kind === 'added') {
     var category = findOption(CATEGORIES, wish.category), priority = findOption(PRIORITIES, wish.priority);
-    lines = ['<b>' + escapeHtml(wish.createdBy.name) + '</b> добавил(а) желание:', '<b>' + escapeHtml(wish.title) + '</b>',
-             category.label + ' · ' + priority.label];
+    lines = ['🆕 <b>НОВОЕ ЖЕЛАНИЕ</b>', '', title, category.label + ' · ' + priority.label];
     if (priceText(wish)) lines.push('Цена: ' + priceText(wish));
-    if (wish.note) lines.push(escapeHtml(shorten(wish.note, 300)));
-    if (wish.planned) lines.push('В плане: ' + planText(wish));
-  } else if (kind === 'planned') {
-    lines = ['<b>Планируем купить</b>: ' + escapeHtml(wish.title), 'Когда: <b>' + planText(wish) + '</b>'];
+    if (wish.note) lines.push('', '<i>' + escapeHtml(shorten(wish.note, 300)) + '</i>');
+    if (wish.planned) lines.push('', '📅 В плане: ' + planText(wish));
+    lines.push('', 'Добавил(а): ' + escapeHtml(wish.createdBy.name));
+    options.button = 'Открыть и проголосовать';
+  } else if (kind === 'planned' || kind === 'moved') {
+    lines = ['📅 <b>' + (kind === 'moved' ? 'ПЕРЕНЕСЛИ ПОКУПКУ' : 'ПЛАНИРУЕМ КУПИТЬ') + '</b>', '', title, 'Когда: <b>' + planText(wish) + '</b>'];
     if (priceText(wish)) lines.push('Цена: ' + priceText(wish));
+    if (who) lines.push('', (kind === 'moved' ? 'Перенёс(ла): ' : 'Запланировал(а): ') + who);
+    options = { reply: true, start: 'plan', button: 'Открыть план покупок' };
   } else {
     var paid = wish.boughtPrice != null ? wish.boughtPrice : itemTotal(wish);
-    lines = ['<b>Куплено</b>: ' + escapeHtml(wish.title)];
+    lines = ['✅ <b>КУПЛЕНО</b>', '', title];
     if (paid != null) lines.push('Оплачено: ' + formatMoney(paid, wish.currency));
+    if (who) lines.push('', 'Отметил(а): ' + who);
+    options = { reply: true };
   }
-  return post(wish, lines.join('\n'));
+  return post(wish, lines.join('\n'), options);
 }
 
 /** Posts a new wish to the group and remembers that it did, so a failed post can be retried. */
 function announce(wish) {
   var sent = notify('added', wish);
-  if (sent && sent.ok) wish.postedAt = new Date().toISOString();
+  if (sent && sent.ok) {
+    wish.postedAt = new Date().toISOString();
+    wish.postMessageId = sent.result && sent.result.message_id;
+  }
   else wish.postTries = (wish.postTries || 0) + 1;
   saveWish(wish);
   return sent;

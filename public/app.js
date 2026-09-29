@@ -190,13 +190,20 @@ function upsert(item) {
   refreshAll();
 }
 
+/** What happened to the group post, for the toast after a save. */
+function postedNote(posted) {
+  if (posted === true) return ' · в группе';
+  if (posted === false) return ' · в группу не ушло';
+  return '';
+}
+
 async function save(id, patch, message) {
   try {
-    const { item } = await API.update(id, patch);
+    const { item, posted } = await API.update(id, patch);
     upsert(item);
     haptic.success();
-    if (message) toast(message);
-    return item;
+    if (message) toast(message + postedNote(posted), posted === false ? 'error' : 'info');
+    return { item, posted };
   } catch (error) {
     haptic.error();
     toast(error.message, 'error');
@@ -720,16 +727,21 @@ function render() {
  * Month chips for the next 12 months, an exact-day picker and "not sure yet".
  * `onPick` gets { plannedDate, plannedPrecision }.
  */
-function planPicker({ current, onPick, confirmDay = false }) {
+function planPicker({ current, onPick, confirmDay = false, pending = null }) {
   const now = today();
   const months = Array.from({ length: 12 }, (_, index) => addMonths(now, index));
-  const selectedMonth = current?.planned && current.plannedPrecision === 'month' ? current.plannedDate : null;
-  const selectedDay = current?.planned && current.plannedPrecision === 'day' ? current.plannedDate : '';
+  // While a choice is being saved, it shows as chosen right away and the rest waits.
+  const shown = pending ? { planned: true, ...pending } : current;
+  const selectedMonth = shown?.planned && shown.plannedPrecision === 'month' ? shown.plannedDate : null;
+  const selectedDay = shown?.planned && shown.plannedPrecision === 'day' ? shown.plannedDate : '';
+  const busy = Boolean(pending);
+  const saving = (selected) => (busy && selected ? [h('span', { class: 'spinner small' }), ' '] : null);
 
   const dayInput = h('input', {
     type: 'date',
     min: now,
     value: selectedDay,
+    disabled: busy,
     'aria-label': 'Точная дата',
     onchange: (event) => {
       if (confirmDay) setDay.disabled = !isValidDate(event.target.value);
@@ -741,15 +753,17 @@ function planPicker({ current, onPick, confirmDay = false }) {
     {
       type: 'button',
       class: 'button primary',
-      disabled: !isValidDate(selectedDay),
+      disabled: busy || !isValidDate(selectedDay),
       onclick: () => isValidDate(dayInput.value) && onPick({ plannedDate: dayInput.value, plannedPrecision: 'day' }),
     },
-    'Выбрать',
+    saving(Boolean(selectedDay)),
+    busy && selectedDay ? 'Сохраняю…' : 'Выбрать',
   );
 
   return h(
     'div',
     { class: 'plan-picker' },
+    busy ? h('p', { class: 'plan-status' }, h('span', { class: 'spinner small' }), ' Сохраняю и отправляю в группу…') : null,
     h('div', { class: 'picker-label' }, 'В каком месяце?'),
     h(
       'div',
@@ -760,8 +774,10 @@ function planPicker({ current, onPick, confirmDay = false }) {
           {
             type: 'button',
             class: `chip${selectedMonth === month ? ' selected' : ''}`,
+            disabled: busy,
             onclick: () => onPick({ plannedDate: month, plannedPrecision: 'month' }),
           },
+          saving(selectedMonth === month),
           index === 0 ? 'Этот месяц' : index === 1 ? 'Следующий' : formatShortMonth(month, now),
         ),
       ),
@@ -772,9 +788,11 @@ function planPicker({ current, onPick, confirmDay = false }) {
       'button',
       {
         type: 'button',
-        class: `chip wide${current?.planned && !current.plannedDate ? ' selected' : ''}`,
+        class: `chip wide${shown?.planned && !shown.plannedDate ? ' selected' : ''}`,
+        disabled: busy,
         onclick: () => onPick({ plannedDate: null, plannedPrecision: null }),
       },
+      saving(shown?.planned && !shown.plannedDate),
       'Пока не знаем — просто в план',
     ),
   );
@@ -827,11 +845,20 @@ function planSection(item, sheet) {
             return;
           }
           sheet.ui.picking = false;
+          sheet.ui.planned = null;
           if (item.planned) await save(item.id, { planned: false }, 'Убрано из плана').catch(() => {});
           sheet.refresh();
         },
       }),
     ),
+    sheet.ui.planned && item.planned && !showPicker
+      ? h('p', { class: `plan-done${sheet.ui.planned.posted === false ? ' warn' : ''}` },
+          sheet.ui.planned.posted === false
+            ? '✓ Запланировано. Сообщение в группу не отправилось'
+            : sheet.ui.planned.posted
+              ? '✓ Запланировано. Сообщение отправлено в группу'
+              : '✓ Запланировано')
+      : null,
     item.planned && !showPicker
       ? h(
           'div',
@@ -844,6 +871,7 @@ function planSection(item, sheet) {
               class: 'button small',
               onclick: () => {
                 sheet.ui.picking = true;
+                sheet.ui.planned = null;
                 sheet.refresh();
               },
             },
@@ -855,14 +883,22 @@ function planSection(item, sheet) {
       ? planPicker({
           current: item,
           confirmDay: true,
+          pending: sheet.ui.pending,
           onPick: async (value) => {
+            if (sheet.ui.pending) return;
+            haptic.tap();
+            sheet.ui.pending = value;
+            sheet.refresh();
             try {
-              await save(item.id, { planned: true, ...value }, 'Запланировано');
+              const { posted } = await save(item.id, { planned: true, ...value }); // the panel says the rest
+              toast('Запланировано');
               sheet.ui.picking = false;
-              sheet.refresh();
+              sheet.ui.planned = { posted };
             } catch {
-              // toast already shown
+              // toast already shown; the picker stays open to try again
             }
+            sheet.ui.pending = null;
+            sheet.refresh();
           },
         })
       : null,
@@ -1031,6 +1067,7 @@ function openBoughtSheet(item) {
           onclick: async (event) => {
             const button = event.currentTarget;
             button.disabled = true;
+            button.replaceChildren(h('span', { class: 'spinner small' }), ' Сохраняю…');
             try {
               await save(
                 item.id,
@@ -1044,6 +1081,7 @@ function openBoughtSheet(item) {
               sheet.close();
             } catch {
               button.disabled = false;
+              button.textContent = 'Отметить купленным';
             }
           },
         },
@@ -1379,11 +1417,11 @@ function openForm(existing) {
       Object.assign(body, { planned: form.planned, plannedDate: form.plannedDate, plannedPrecision: form.plannedPrecision });
     }
     try {
-      const { item } = existing ? await API.update(existing.id, body) : await API.create(body);
+      const { item, posted } = existing ? await API.update(existing.id, body) : await API.create(body);
       if (!existing && state.tab === 'bought') state.tab = 'wishlist';
       upsert(item);
       haptic.success();
-      toast(existing ? 'Сохранено' : 'Добавлено в вишлист');
+      toast((existing ? 'Сохранено' : 'Добавлено в вишлист') + postedNote(posted));
       sheet.close();
     } catch (error) {
       haptic.error();
