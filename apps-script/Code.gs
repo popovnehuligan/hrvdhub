@@ -73,10 +73,15 @@ function doPost(e) {
 
 function respond(fn) {
   var out;
-  try { out = { ok: true, data: fn() } }
-  catch (err) {
+  try {
+    // All the settings in one trip: a request reads ten or more of them, each one a trip otherwise.
+    PROPS = PropertiesService.getScriptProperties().getProperties();
+    out = { ok: true, data: fn() };
+  } catch (err) {
     out = { ok: false, error: String((err && err.message) || err), status: (err && err.status) || 400 };
     if (err && err.code) { out.code = err.code; out.bot = err.bot }
+  } finally {
+    PROPS = null;
   }
   // Non-ASCII as \uXXXX, so the answer doesn't depend on how the client guesses the encoding.
   var json = JSON.stringify(out).replace(/[\u0080-￿]/g, function (c) {
@@ -216,15 +221,15 @@ function handle(action, p, user) {
   }
   if (action === 'preview') return preview(p.url);
   if (action === 'upload') return upload(p.photo);
+  if (['create', 'vote', 'update', 'delete'].indexOf(action) < 0) fail('Неизвестное действие');
 
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
+  return changeWishes(function (table) {
     // The app retries when Google's answer gets lost; the same request id must not add a wish twice.
     var rid = p.rid ? 'rid:' + String(p.rid).slice(0, 64) : null;
     var cache = CacheService.getScriptCache();
-    if (rid && cache.get(rid)) {
-      var done = findWish(cache.get(rid));
+    var doneId = rid ? cache.get(rid) : null;
+    if (doneId) {
+      var done = findWish(table, doneId);
       return { item: done ? view(user)(done) : null };
     }
 
@@ -233,18 +238,18 @@ function handle(action, p, user) {
       var wish = newWish(patch, { user: user, currency: currency() });
       if (!wish.link && !wish.image) fail('Добавьте фото или ссылку');
       if (wish.link && !wish.image) attachLinkImage(wish);
-      saveWish(wish);
+      saveWish(table, wish);
       if (rid) cache.put(rid, wish.id, 21600);
-      var announced = announce(wish);
+      var announced = announce(table, wish);
       return { item: view(user)(wish), posted: Boolean(announced && announced.ok) };
     }
 
-    var current = findWish(p.id);
+    var current = findWish(table, p.id);
     if (!current) fail('Этого желания больше нет', 404);
 
     if (action === 'vote') {
       var voted = toggleVote(current, user);
-      saveWish(voted);
+      saveWish(table, voted);
       return { item: view(user)(voted) };
     }
     if (action === 'update') {
@@ -253,20 +258,15 @@ function handle(action, p, user) {
       var result = applyWishPatch(current, changes);
       var next = result.wish;
       if (next.link && !next.image && next.link !== current.link) attachLinkImage(next);
-      saveWish(next);
+      saveWish(table, next);
       var kind = result.becameBought ? 'bought' : result.becamePlanned ? 'planned' : result.planMoved ? 'moved' : null;
       var sent = kind ? notify(kind, next, user) : null;
       return { item: view(user)(next), posted: sent ? Boolean(sent.ok) : null };
     }
-    if (action === 'delete') {
-      if (!canEditWish(current, ctx)) fail('Можно удалять только свои желания', 403);
-      removeWish(current.id);
-      return { ok: true };
-    }
-  } finally {
-    lock.releaseLock();
-  }
-  fail('Неизвестное действие');
+    if (!canEditWish(current, ctx)) fail('Можно удалять только свои желания', 403);
+    removeWish(table, current.id);
+    return { ok: true };
+  });
 }
 
 function view(user) {
@@ -305,26 +305,125 @@ function wishSheet() {
   return sheet;
 }
 
-function readWishes() {
+/**
+ * Every wish, straight from the sheet: { sheet, wishes, rows, lastRow }, rows[i] being the row of
+ * wishes[i]. Changes always start from this (changeWishes), never from the cache.
+ */
+function loadWishes() {
   var sheet = wishSheet();
-  var count = sheet.getLastRow() - 1;
-  if (count < 1) return [];
-  return sheet.getRange(2, DATA_COL, count, 1).getValues()
-    .map(function (row) { try { return JSON.parse(row[0]) } catch (e) { return null } })
-    .filter(function (wish) { return wish && wish.id });
+  var lastRow = sheet.getLastRow();
+  var table = { sheet: sheet, wishes: [], rows: [], lastRow: lastRow, changed: false };
+  if (lastRow < 2) return table;
+  sheet.getRange(2, DATA_COL, lastRow - 1, 1).getValues().forEach(function (row, i) {
+    var wish = null;
+    try { wish = JSON.parse(row[0]) } catch (e) { /* not a wish */ }
+    if (wish && wish.id) { table.wishes.push(wish); table.rows.push(i + 2) }
+  });
+  return table;
 }
 
-function findWish(id) {
-  if (!id) return null;
-  return readWishes().filter(function (wish) { return wish.id === String(id) })[0] || null;
-}
-
-function rowIndex(sheet, id) {
-  var count = sheet.getLastRow() - 1;
-  if (count < 1) return -1;
-  var column = sheet.getRange(2, 1, count, 1).getValues();
-  for (var i = 0; i < column.length; i++) if (String(column[i][0]) === id) return i + 2;
+function wishIndex(table, id) {
+  if (!id) return -1;
+  for (var i = 0; i < table.wishes.length; i++) if (table.wishes[i].id === String(id)) return i;
   return -1;
+}
+
+function findWish(table, id) {
+  var i = wishIndex(table, id);
+  return i < 0 ? null : table.wishes[i];
+}
+
+/**
+ * Every wish, for reading only: from the script cache when it's there, so opening the app
+ * doesn't open the sheet at all. Not for use while holding the script lock (changes use changeWishes).
+ */
+function readWishes() {
+  var cached = cachedWishes();
+  if (cached) return cached;
+  // The cache is filled only under the script lock, like every change fills it, so a slow read
+  // can't put back a list older than a change saved in the meantime. Busy: just read.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(100)) return loadWishes().wishes;
+  try {
+    var wishes = loadWishes().wishes;
+    cacheWishes(wishes);
+    return wishes;
+  } finally { lock.releaseLock() }
+}
+
+/**
+ * Changes to wishes: fn(table) runs holding the script lock, on the wishes read from the sheet,
+ * saving with saveWish/removeWish. The cache gets the result, or is dropped if fn failed midway.
+ */
+function changeWishes(fn) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  var table = null;
+  try {
+    table = loadWishes();
+    var result = fn(table);
+    cacheWishes(table.wishes);
+    return result;
+  } catch (e) {
+    if (table && table.changed) { try { forgetWishes() } catch (ignored) { /* expires by itself */ } }
+    throw e;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/*
+ * The cached list: the wishes as JSON in parts of CODE_PART characters (a cache entry holds 100 KB),
+ * all read in one trip; 40 wishes take about two. Each part starts with the same «version/stamp:count:»,
+ * so parts of two different saves are never glued together. Kept 6 hours; the hourly autoUpdate
+ * re-reads the sheet, and onEdit drops it when someone edits the sheet by hand.
+ */
+var WISHES_CACHE_KEY = 'wishes';
+var WISHES_READ_PARTS = 8;  // asked for in the first trip; a longer list takes a second one
+var WISHES_MAX_PARTS = 40;  // longer than that (1 000 000 characters): read from the sheet every time
+
+function wishCacheKeys(from, to) {
+  var keys = [];
+  for (var i = from; i < to; i++) keys.push(WISHES_CACHE_KEY + i);
+  return keys;
+}
+
+function cacheWishes(wishes) {
+  var cut = splitParts(JSON.stringify(wishes));
+  if (cut.length > WISHES_MAX_PARTS) return forgetWishes();
+  var stamp = runningVersion() + '/' + newWishId() + ':' + cut.length + ':', parts = {};
+  cut.forEach(function (part, i) { parts[WISHES_CACHE_KEY + i] = stamp + part });
+  CacheService.getScriptCache().putAll(parts, 21600);
+}
+
+function cachedWishes() {
+  var cache = CacheService.getScriptCache();
+  var got = cache.getAll(wishCacheKeys(0, WISHES_READ_PARTS));
+  var head = /^([^\/:]+)\/\w+:(\d+):/.exec(got[WISHES_CACHE_KEY + 0] || '');
+  // Kept by another version of this script (say, an older one that didn't keep it up to date): read afresh.
+  if (!head || head[1] !== runningVersion()) return null;
+  var count = Number(head[2]);
+  if (count > WISHES_READ_PARTS) {
+    var rest = cache.getAll(wishCacheKeys(WISHES_READ_PARTS, count));
+    Object.keys(rest).forEach(function (k) { got[k] = rest[k] });
+  }
+  var json = '';
+  for (var i = 0; i < count; i++) {
+    var part = got[WISHES_CACHE_KEY + i];
+    if (!part || part.indexOf(head[0]) !== 0) return null;
+    json += part.slice(head[0].length);
+  }
+  try { return JSON.parse(json) } catch (e) { return null }
+}
+
+function forgetWishes() { CacheService.getScriptCache().remove(WISHES_CACHE_KEY + 0) }
+
+/** Someone edited the sheet by hand (a simple trigger): the app reads it afresh next time. */
+function onEdit(e) {
+  try {
+    if (e && e.range && e.range.getSheet().getName() !== SHEET_NAME) return;
+  } catch (err) { /* can't tell which sheet: drop it anyway */ }
+  forgetWishes();
 }
 
 function readableRow(wish) {
@@ -340,17 +439,31 @@ function readableRow(wish) {
   ];
 }
 
-function saveWish(wish) {
-  var sheet = wishSheet();
-  var row = rowIndex(sheet, wish.id);
-  if (row < 0) sheet.appendRow(readableRow(wish));
-  else sheet.getRange(row, 1, 1, HEADER.length).setValues([readableRow(wish)]);
+/** Writes a wish into its row, or a new row at the end. `table` is from loadWishes, under the lock. */
+function saveWish(table, wish) {
+  var i = wishIndex(table, wish.id);
+  if (i < 0) {
+    table.sheet.appendRow(readableRow(wish));
+    table.lastRow += 1;
+    table.wishes.push(wish);
+    table.rows.push(table.lastRow);
+  } else {
+    table.sheet.getRange(table.rows[i], 1, 1, HEADER.length).setValues([readableRow(wish)]);
+    table.wishes[i] = wish;
+  }
+  table.changed = true;
 }
 
-function removeWish(id) {
-  var sheet = wishSheet();
-  var row = rowIndex(sheet, id);
-  if (row > 0) sheet.deleteRow(row);
+function removeWish(table, id) {
+  var i = wishIndex(table, id);
+  if (i < 0) return;
+  var row = table.rows[i];
+  table.sheet.deleteRow(row);
+  table.wishes.splice(i, 1);
+  table.rows.splice(i, 1);
+  table.rows = table.rows.map(function (r) { return r > row ? r - 1 : r });
+  table.lastRow -= 1;
+  table.changed = true;
 }
 
 /* ---------------- photos (Google Drive) ---------------- */
@@ -686,7 +799,7 @@ function post(wish, text, options) {
       result = { ok: false, description: e.message };
     }
   }
-  if (result.ok) setProp('LAST_POST_ERROR', '');
+  if (result.ok) { if (prop('LAST_POST_ERROR')) setProp('LAST_POST_ERROR', '') }
   else {
     console.warn('Не удалось написать в группу: ' + result.description);
     setProp('LAST_POST_ERROR', Utilities.formatDate(new Date(), timeZone(), 'dd.MM HH:mm') + ' — ' + (result.description || result.error_code));
@@ -726,34 +839,33 @@ function notify(kind, wish, actor) {
 }
 
 /** Posts a new wish to the group and remembers that it did, so a failed post can be retried. */
-function announce(wish) {
+function announce(table, wish) {
   var sent = notify('added', wish);
   if (sent && sent.ok) {
     wish.postedAt = new Date().toISOString();
     wish.postMessageId = sent.result && sent.result.message_id;
   }
   else wish.postTries = (wish.postTries || 0) + 1;
-  saveWish(wish);
+  saveWish(table, wish);
   return sent;
 }
 
 /** New wishes (last 24 hours) whose post to the group didn't go through: tries again, 3 times at most. */
-function unposted() {
+function unposted(wishes) {
   var since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  return readWishes().filter(function (w) {
+  return wishes.filter(function (w) {
     return w.status === 'wanted' && !w.postedAt && (w.postTries || 0) < 3 && String(w.createdAt || '') >= since;
   });
 }
 
+/** Hourly (autoUpdate) and after publishing; reading the sheet here also refreshes the cached list. */
 function catchUpPosts() {
-  if (!notifyChat()) return 0;
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
+  return changeWishes(function (table) {
+    if (!notifyChat()) return 0;
     var sent = 0;
-    unposted().forEach(function (w) { if (announce(w).ok) sent++ });
+    unposted(table.wishes).forEach(function (w) { if (announce(table, w).ok) sent++ });
     return sent;
-  } finally { lock.releaseLock() }
+  });
 }
 
 /** Runs every morning (setup() installs the trigger): one message about purchases that are due. */
@@ -761,8 +873,7 @@ function dailyReminders() {
   var chat = notifyChat();
   if (!chat) return;
   var now = today();
-  var wishes = readWishes();
-  var due = wishes.filter(function (w) { return isDue(w, now) && w.remindedFor !== w.plannedDate });
+  var due = loadWishes().wishes.filter(function (w) { return isDue(w, now) && w.remindedFor !== w.plannedDate });
   if (!due.length) return;
   var lines = ['<b>Скоро покупаем</b>'];
   due.forEach(function (w) {
@@ -774,14 +885,12 @@ function dailyReminders() {
   var sent = sendTo('sendMessage', Object.assign(target(chat), { text: shorten(lines.join('\n'), 4000), parse_mode: 'HTML',
                                                            reply_markup: openButton('plan', 'Открыть план') }));
   if (!sent.ok) throw new Error('Telegram sendMessage: ' + (sent.description || sent.error_code));
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
+  changeWishes(function (table) {
     due.forEach(function (w) {
-      var fresh = findWish(w.id);
-      if (fresh) { fresh.remindedFor = fresh.plannedDate; saveWish(fresh) }
+      var fresh = findWish(table, w.id);
+      if (fresh) { fresh.remindedFor = fresh.plannedDate; saveWish(table, fresh) }
     });
-  } finally { lock.releaseLock() }
+  });
 }
 
 /* ---------------- always the latest code ---------------- */
@@ -794,35 +903,64 @@ function dailyReminders() {
  * «refreshCode»). If anything goes wrong, this pasted copy keeps working.
  */
 var CODE_CACHE_KEY = 'latest-code';
-var CODE_PART = 25000; // characters per cache entry: Cyrillic takes 2 bytes, an entry holds 100 KB
+var CODE_PART = 25000; // characters per cache entry: a character takes up to 3 bytes, an entry holds 100 KB
+var CODE_READ_PARTS = 6; // parts asked for together with the head, in one trip: 150 000 characters
+
+/** Cuts text into cache entries, never between the two halves of an emoji. */
+function splitParts(text) {
+  var parts = [], start = 0;
+  while (start < text.length) {
+    var end = Math.min(start + CODE_PART, text.length);
+    var last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--;
+    parts.push(text.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
 
 /** Downloads the published script and keeps it in the cache. Returns its version. */
-function refreshCode() {
+function refreshCode() { return downloadCode().hash }
+
+/** The published script, checked and cached: { code, hash }. */
+function downloadCode() {
   var code = fetchText(appUrlSetting() + 'setup/wishlist-script.txt?t=' + Date.now());
   checkCode(code);
   var hash = codeHash(code);
-  var count = Math.ceil(code.length / CODE_PART), parts = {};
-  for (var i = 0; i < count; i++) parts[CODE_CACHE_KEY + i] = code.slice(i * CODE_PART, (i + 1) * CODE_PART);
-  parts[CODE_CACHE_KEY] = JSON.stringify({ parts: count, hash: hash });
+  var cut = splitParts(code), parts = {};
+  cut.forEach(function (part, i) { parts[CODE_CACHE_KEY + i] = part });
+  parts[CODE_CACHE_KEY] = JSON.stringify({ parts: cut.length, hash: hash });
   CacheService.getScriptCache().putAll(parts, 21600);
-  return hash;
+  return { code: code, hash: hash };
 }
 
+// Same entries as ever (older pasted copies read them too), but the head and the parts in one trip.
 function cachedCode() {
   var cache = CacheService.getScriptCache();
-  var head = cache.get(CODE_CACHE_KEY);
-  if (!head) return null;
-  head = JSON.parse(head);
-  var keys = [];
-  for (var i = 0; i < head.parts; i++) keys.push(CODE_CACHE_KEY + i);
+  var keys = [CODE_CACHE_KEY];
+  for (var i = 0; i < CODE_READ_PARTS; i++) keys.push(CODE_CACHE_KEY + i);
   var got = cache.getAll(keys);
-  if (keys.some(function (k) { return got[k] == null })) return null;
-  return { code: keys.map(function (k) { return got[k] }).join(''), hash: head.hash };
+  if (!got[CODE_CACHE_KEY]) return null;
+  var head = JSON.parse(got[CODE_CACHE_KEY]);
+  var more = [];
+  for (var j = CODE_READ_PARTS; j < head.parts; j++) more.push(CODE_CACHE_KEY + j);
+  if (more.length) {
+    var rest = cache.getAll(more);
+    Object.keys(rest).forEach(function (k) { got[k] = rest[k] });
+  }
+  var code = '';
+  for (var n = 0; n < head.parts; n++) {
+    if (got[CODE_CACHE_KEY + n] == null) return null;
+    code += got[CODE_CACHE_KEY + n];
+  }
+  return { code: code, hash: head.hash };
 }
+
+function isWishlistCode(code) { return code.indexOf('function doPost') >= 0 && code.indexOf('WISHLIST_LOADED') >= 0 }
 
 /** Only the wishlist script, and only if it parses: a broken download never replaces working code. */
 function checkCode(code) {
-  if (code.indexOf('function doPost') < 0 || code.indexOf('WISHLIST_LOADED') < 0) throw new Error('на GitHub Pages не тот скрипт');
+  if (!isWishlistCode(code)) throw new Error('на GitHub Pages не тот скрипт');
   new Function(code); // parses without running
 }
 
@@ -865,7 +1003,7 @@ function setup() {
   if (PASTED_BOT_TOKEN && prop('BOT_TOKEN') !== PASTED_BOT_TOKEN) setProp('BOT_TOKEN', PASTED_BOT_TOKEN);
   if (!botToken()) throw new Error('Нет ключа бота: скопируйте скрипт заново со страницы настройки, вставив ключ');
   var report = [];
-  wishSheet();
+  changeWishes(function () {}); // creates the sheet if needed and puts the wishes into the cache
   report.push('✓ Лист «' + SHEET_NAME + '» готов');
   report.push('✓ Папка для фото: «' + photosFolder().getName() + '» на Google Диске');
 
@@ -963,7 +1101,7 @@ function check() {
 
   if (prop('LAST_POST_ERROR')) report.push('• Последняя ошибка при отправке: ' + prop('LAST_POST_ERROR'));
 
-  var wishes = readWishes().filter(function (w) { return w.status !== 'dropped' });
+  var wishes = loadWishes().wishes.filter(function (w) { return w.status !== 'dropped' });
   wishes.sort(function (a, b) { return String(b.createdAt || '').localeCompare(String(a.createdAt || '')) });
   var sent;
   if (wishes.length) {
@@ -1052,13 +1190,21 @@ function findGroups() {
 
 /* ---------------- small helpers ---------------- */
 
-function prop(key) { return PropertiesService.getScriptProperties().getProperty(key) }
+// During a web request (respond) all script properties, read at once; elsewhere null: read one by one.
+var PROPS = null;
+function prop(key) {
+  if (PROPS) return Object.prototype.hasOwnProperty.call(PROPS, key) ? PROPS[key] : null;
+  return PropertiesService.getScriptProperties().getProperty(key);
+}
 function botToken() { return prop('BOT_TOKEN') || PASTED_BOT_TOKEN }
 function appUrlSetting() {
   var url = prop('APP_URL') || DEFAULT_APP_URL;
   return /\/$/.test(url) ? url : url + '/';
 }
-function setProp(key, value) { PropertiesService.getScriptProperties().setProperty(key, String(value)) }
+function setProp(key, value) {
+  PropertiesService.getScriptProperties().setProperty(key, String(value));
+  if (PROPS) PROPS[key] = String(value);
+}
 function currency() { return String(prop('CURRENCY') || 'EUR').toUpperCase() }
 // A script pasted by hand has no manifest, so its time zone is the account's; Bratislava by default.
 function timeZone() { return prop('TIMEZONE') || 'Europe/Bratislava' }
@@ -1070,10 +1216,10 @@ function today() { return Utilities.formatDate(new Date(), timeZone(), 'yyyy-MM-
   if (globalThis.WISHLIST_LOADED) return;
   globalThis.WISHLIST_LOADED = true;
   try {
-    var latest = cachedCode();
-    if (!latest) { refreshCode(); latest = cachedCode() }
-    if (!latest) return;
-    checkCode(latest.code);
+    var latest = cachedCode() || downloadCode();
+    // It was parsed (checkCode) before it went into the cache, and eval parses all of it before
+    // running any of it, so broken code still changes nothing: parsing it twice would only cost time.
+    if (!isWishlistCode(latest.code)) return;
     var pasted = PASTED_BOT_TOKEN;
     (0, eval)(latest.code);
     if (pasted) PASTED_BOT_TOKEN = pasted;

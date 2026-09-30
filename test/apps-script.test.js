@@ -267,11 +267,11 @@ test('a wish with a photo is posted into the topic', () => {
 
 test('if Telegram refuses the photo, the wish is posted as text, and the error is kept', () => {
   const refuse = { ok: false, error_code: 400, description: 'Bad Request: not enough rights to send photos to the chat' };
-  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot', LAST_POST_ERROR: '01.10 10:00 — old' }, members, pages: shop,
                           tg: (method) => (method === 'sendPhoto' ? refuse : null) });
   assert.equal(gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member).ok, true);
   assert.match(gas.sent('sendMessage').at(-1).params.text, /Микрофон/);
-  assert.equal(gas.properties.LAST_POST_ERROR, '');
+  assert.equal(gas.properties.LAST_POST_ERROR, '', 'a post that went through clears the old error');
 
   const silent = createGas({ props: { GROUP_CHAT_ID: '-100555', BOT_USERNAME: 'horovod_wishlist_bot' }, members, pages: shop,
                              tg: (method) => (/^send/.test(method) ? refuse : null) });
@@ -400,4 +400,127 @@ test('someone the bot has never met is asked to press «Старт», and gets i
   met = true; // pressed «Старт»
   assert.equal(gas.call('list', {}, newcomer).ok, true, 'not held back by a cached refusal');
   assert.equal(gas.call('list', {}, { id: 99, first_name: 'Eve' }).code, undefined, 'a real outsider just gets the members-only message');
+});
+
+test('opening the app reads the cached list, not the sheet; every change refreshes it', () => {
+  const gas = world();
+  const sheets = gas.context.SpreadsheetApp;
+  const noSheet = { getActive() { throw new Error('the sheet was opened'); }, openById() { throw new Error('the sheet was opened'); } };
+  const list = (user) => {
+    gas.context.SpreadsheetApp = noSheet;
+    try { return gas.call('list', {}, user); } finally { gas.context.SpreadsheetApp = sheets; }
+  };
+  const id = gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member).data.item.id;
+  const first = list(member);
+  assert.equal(first.ok, true, first.error);
+  assert.deepEqual(first.data.items.map((w) => [w.id, w.mine, w.voted]), [[id, true, false]]);
+
+  gas.call('vote', { id }, other);
+  assert.deepEqual(list(other).data.items.map((w) => [w.votes, w.voted, w.mine]), [[1, true, false]], 'voted and mine are per person');
+  assert.deepEqual(list(member).data.items.map((w) => [w.votes, w.voted, w.voters]), [[1, false, ['Богдан']]]);
+
+  gas.call('update', { id, patch: { title: 'Shure SM58' } }, member);
+  assert.equal(list(member).data.items[0].title, 'Shure SM58');
+  const second = gas.call('create', { wish: { title: 'Стойка', link: 'https://shop.example/stand' } }, admin).data.item.id;
+  gas.call('delete', { id }, member);
+  assert.deepEqual(list(admin).data.items.map((w) => w.id), [second]);
+  assert.equal(list(admin).data.items[0].postedAt, undefined, 'the group-post bookkeeping stays on the server');
+
+  gas.context.SpreadsheetApp = noSheet;
+  assert.equal(JSON.parse(gas.context.doGet().text).data.status.wishes, 1, 'nor does the health check');
+  gas.context.SpreadsheetApp = sheets;
+});
+
+test('edits made by hand in the sheet reach the app: right away (onEdit) or within the hour', () => {
+  const gas = world();
+  gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  const rows = gas.sheets.get('wishes').rows;
+  const retitle = (title) => { const wish = JSON.parse(rows[1][11]); wish.title = title; rows[1][11] = JSON.stringify(wish); };
+  const title = () => gas.call('list', {}, member).data.items[0].title;
+
+  retitle('Микрофон (руками)');
+  assert.equal(title(), 'Микрофон', 'the cached list');
+  gas.context.onEdit({ range: { getSheet: () => ({ getName: () => 'wishes' }) } });
+  assert.equal(title(), 'Микрофон (руками)');
+
+  retitle('Микрофон SM58');
+  gas.context.onEdit({ range: { getSheet: () => ({ getName: () => 'Лист1' }) } });
+  assert.equal(title(), 'Микрофон (руками)', 'edits in other sheets change nothing');
+  gas.context.autoUpdate();
+  assert.equal(title(), 'Микрофон SM58', 'the hourly run reads the sheet again');
+});
+
+test('the cached list stays true to the sheet: failed changes, busy moments, long lists', () => {
+  const gas = world();
+  gas.call('create', { wish: { title: 'Первое', link: 'https://shop.example/a' } }, member);
+
+  // A change that fails halfway (the row is added, its update after posting is not) drops the cache.
+  const sheet = gas.sheets.get('wishes');
+  const getRange = sheet.getRange;
+  sheet.getRange = (...args) => ({ ...getRange(...args), setValues() { throw new Error('Service Spreadsheets failed'); } });
+  assert.equal(gas.call('create', { wish: { title: 'Второе', link: 'https://shop.example/b' } }, member).ok, false);
+  sheet.getRange = getRange;
+  assert.deepEqual(gas.call('list', {}, member).data.items.map((w) => w.title), ['Первое', 'Второе']);
+
+  // While a change holds the lock, a read from the sheet is not kept: it could be older than the change.
+  gas.context.forgetWishes();
+  const locks = gas.context.LockService;
+  gas.context.LockService = { getScriptLock: () => ({ tryLock: () => false, waitLock() {}, releaseLock() {} }) };
+  assert.equal(gas.call('list', {}, member).data.items.length, 2);
+  assert.equal(gas.cache.has('wishes0'), false);
+  gas.context.LockService = locks;
+  gas.call('list', {}, member);
+  assert.equal(gas.cache.has('wishes0'), true);
+
+  // Parts of two different saves are never glued together.
+  gas.context.cacheWishes(Array.from({ length: 100 }, (_, i) => ({ id: `w${i}`, note: 'Заметка. '.repeat(300) })));
+  assert.ok(gas.cache.has('wishes9'), 'a long list takes many parts');
+  assert.equal(gas.context.cachedWishes().length, 100);
+  gas.context.WISHLIST_VERSION = 'abcdef123456';
+  assert.equal(gas.context.cachedWishes(), null, 'a list kept by another version of the script is read afresh');
+  delete gas.context.WISHLIST_VERSION;
+  assert.equal(gas.context.cachedWishes().length, 100);
+  gas.cache.set('wishes9', gas.cache.get('wishes9').replace(/\/\w+:/, '/other:'));
+  assert.equal(gas.context.cachedWishes(), null);
+});
+
+test('a request reads all the settings in one trip, and the published code in one trip', () => {
+  const gas = world();
+  gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  const properties = gas.context.PropertiesService;
+  const trips = { one: 0, all: 0 };
+  gas.context.PropertiesService = { getScriptProperties: () => {
+    const p = properties.getScriptProperties();
+    return { ...p, getProperty: (k) => (trips.one++, p.getProperty(k)), getProperties: () => (trips.all++, p.getProperties()) };
+  } };
+  gas.call('create', { wish: { title: 'Стойка', link: 'https://shop.example/sm58' } }, member);
+  gas.call('list', {}, member);
+  gas.context.doGet();
+  assert.deepEqual(trips, { one: 0, all: 3 });
+
+  const url = 'https://popovnehuligan.github.io/hrvdhub/setup/wishlist-script.txt';
+  const cache = new Map();
+  createGas({ members, pages: published, cache });
+  const offline = createGas({ members, cache });
+  assert.match(JSON.parse(offline.context.doGet().text).data.version, /^[0-9a-f]{12}$/, 'runs the cached code');
+  let cacheTrips = 0;
+  const service = offline.context.CacheService;
+  offline.context.CacheService = { getScriptCache: () => {
+    const c = service.getScriptCache();
+    return { ...c, get: (k) => (cacheTrips++, c.get(k)), getAll: (k) => (cacheTrips++, c.getAll(k)) };
+  } };
+  assert.equal(offline.context.cachedCode().code, published[url].body);
+  assert.equal(cacheTrips, 1);
+});
+
+test('cache entries are cut between characters, never inside an emoji', () => {
+  // A store that keeps text as UTF-8, where half an emoji does not survive.
+  class Utf8Cache extends Map { set(k, v) { return super.set(k, Buffer.from(String(v), 'utf8').toString('utf8')); } }
+  const gas = createGas({ members, cache: new Utf8Cache() });
+  assert.deepEqual(Array.from(gas.context.splitParts('a'.repeat(24999) + '🆕b'), (p) => p.length), [24999, 3]);
+  for (let shift = 0; shift < 2; shift++) {
+    const title = 'x'.repeat(24975 + shift) + '🎸'.repeat(5);
+    gas.context.cacheWishes([{ id: 'w1', title }]);
+    assert.equal(gas.context.cachedWishes()[0].title, title);
+  }
 });

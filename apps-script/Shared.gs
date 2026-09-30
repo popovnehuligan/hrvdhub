@@ -453,7 +453,8 @@ function toggleVote(wish, user) {
 
 /** What the Mini App gets to see of a wish. `imageUrl` turns an image reference into an address. */
 function publicWish(wish, userId, imageUrl) {
-  const { votes, remindedFor, ...rest } = wish;
+  // Voters' ids and the server's bookkeeping (reminders, the group post) stay on the server.
+  const { votes, remindedFor, postedAt, postMessageId, postTries, ...rest } = wish;
   return {
     ...rest,
     imageUrl: wish.image ? imageUrl(wish.image) : null,

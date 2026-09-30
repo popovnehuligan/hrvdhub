@@ -12,23 +12,37 @@ import {
   toggleVote,
   userRef,
 } from './lib/shared.js';
-import { demoWishes } from './demo/wishes.js';
 
 const DEMO_KEY = 'horovod-wishlist-demo-v1';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const requestId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
-export function createApi({ url, initData, telegramUser }) {
-  return url ? liveApi(url, initData) : demoApi(telegramUser);
+/**
+ * `early` is the list request index.html starts before this code has loaded
+ * ({ url, initData, list: Promise<Response> }); the first list() uses its answer.
+ */
+export function createApi({ url, initData, telegramUser, early }) {
+  return url ? liveApi(url, initData, early) : demoApi(telegramUser);
 }
 
-function liveApi(url, initData) {
-  async function once(action, payload) {
-    const response = await fetch(url, {
+function liveApi(url, initData, early) {
+  let earlyList = early && early.url === url && early.initData === initData ? early.list : null;
+
+  function post(action, payload) {
+    if (action === 'list' && earlyList) {
+      const response = earlyList;
+      earlyList = null; // an answer can be read once; retries ask again
+      return response;
+    }
+    return fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // a "simple" request: no CORS preflight
       body: JSON.stringify({ action, payload, initData }),
     });
+  }
+
+  async function once(action, payload) {
+    const response = await post(action, payload);
     // Google answers through a redirect that now and then returns an error page even though
     // the script ran. Such answers are worth another try.
     if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), { retry: true });
@@ -73,16 +87,20 @@ function demoApi(telegramUser) {
   const user = telegramUser?.id ? telegramUser : { id: 1, first_name: 'Миша' };
   const ctx = { userId: user.id, isAdmin: true };
   const today = () => localToday();
-  const load = () => {
+  let wishes = [];
+  const loaded = (async () => {
     try {
       const saved = JSON.parse(localStorage.getItem(DEMO_KEY));
       if (Array.isArray(saved)) return saved;
     } catch {
       // storage unavailable: start from the sample
     }
+    // Loaded only in demo mode, so the live app doesn't wait for it. Same ?v= as this file.
+    const { demoWishes } = await import(`./demo/wishes.js${new URL(import.meta.url).search}`);
     return demoWishes(today());
-  };
-  let wishes = load();
+  })().then((list) => {
+    wishes = list;
+  });
   const persist = () => {
     try {
       localStorage.setItem(DEMO_KEY, JSON.stringify(wishes));
@@ -105,9 +123,11 @@ function demoApi(telegramUser) {
   return {
     demo: true,
     async list() {
+      await loaded;
       return { me: { user: userRef(user), isAdmin: true, currency: 'EUR' }, items: wishes.map(view) };
     },
     async create(input) {
+      await loaded;
       const wish = newWish(cleanWishInput(input, { ...ctx, isNew: true, today: today() }), { user, currency: 'EUR' });
       if (!wish.link && !wish.image) throw new WishError('Добавьте фото или ссылку');
       wishes.unshift(wish);
@@ -115,14 +135,17 @@ function demoApi(telegramUser) {
       return { item: view(wish) };
     },
     async update(id, input) {
+      await loaded;
       const current = find(id);
       if (!canEditWish(current, ctx)) throw new WishError('Можно менять только свои желания', 403);
       return replace(applyWishPatch(current, cleanWishInput(input, { ...ctx, isNew: false, today: today() })).wish);
     },
     async vote(id) {
+      await loaded;
       return replace(toggleVote(find(id), user));
     },
     async remove(id) {
+      await loaded;
       find(id);
       wishes = wishes.filter((w) => w.id !== id);
       persist();

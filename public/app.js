@@ -26,6 +26,7 @@ const API = createApi({
   url: window.WISHLIST_CONFIG?.API || '',
   initData,
   telegramUser: tg?.initDataUnsafe?.user,
+  early: window.WISHLIST_EARLY, // the list request index.html has already started
 });
 const today = () => localToday();
 
@@ -179,15 +180,144 @@ function openSheet({ title = '', render, live = false, tall = false }) {
 // ---------------------------------------------------------------------------
 
 function refreshAll() {
-  render();
+  forgetGoneCards();
+  renderData();
   for (const sheet of sheets) if (sheet.live) sheet.refresh();
 }
 
+/**
+ * Changes made on this device that a list answer might not include yet (Google takes
+ * seconds, so the answer may have been read before them): id → { seq, item, pending }.
+ * `item` is null once deleted; `pending` while a vote is still on its way.
+ */
+const edits = new Map();
+let editSeq = 0;
+
+function noteEdit(id, item, pending = false) {
+  edits.set(id, { seq: ++editSeq, item, pending });
+}
+
+/** A list answer, with this device's newer changes laid over it. */
+function withLocalEdits(items, since) {
+  const newer = new Map();
+  for (const [id, edit] of edits) {
+    if (edit.seq > since || edit.pending) newer.set(id, edit.item);
+    else edits.delete(id); // made before the request: the answer has it
+  }
+  if (!newer.size) return items;
+  const merged = items.filter((item) => !newer.has(item.id) || newer.get(item.id)).map((item) => newer.get(item.id) || item);
+  for (const [id, item] of newer) if (item && !merged.some((other) => other.id === id)) merged.unshift(item);
+  return merged;
+}
+
 function upsert(item) {
+  noteEdit(item.id, item);
   const index = state.items.findIndex((existing) => existing.id === item.id);
   if (index >= 0) state.items[index] = item;
   else state.items.unshift(item);
   refreshAll();
+  saveSnapshot();
+}
+
+// ---------------------------------------------------------------------------
+// The last list seen, kept on this device: the app opens with it at once and
+// swaps in Google's answer when it comes (seconds; much longer when cold).
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_PREFIX = 'horovod-wishlist-snapshot-v1 ';
+// Per script address and person: another deployment or account never sees this copy.
+const snapshotKey = `${SNAPSHOT_PREFIX}${window.WISHLIST_CONFIG?.API || ''} ${tg?.initDataUnsafe?.user?.id || ''}`;
+
+function readSnapshot() {
+  if (API.demo) return null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(snapshotKey));
+    if (saved?.me && Array.isArray(saved.items)) return saved;
+  } catch {
+    // no storage here: open the slow way
+  }
+  return null;
+}
+
+function saveSnapshot() {
+  if (API.demo || !state.loaded) return;
+  const isData = (value) => typeof value === 'string' && value.startsWith('data:');
+  // Pictures stay addresses; a photo's bytes would crowd out the storage.
+  const items = state.items.map((item) => (isData(item.image) || isData(item.imageUrl) ? { ...item, image: null, imageUrl: null } : item));
+  try {
+    localStorage.setItem(snapshotKey, JSON.stringify({ me: state.me, items, savedAt: new Date().toISOString() }));
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(SNAPSHOT_PREFIX) && key !== snapshotKey) localStorage.removeItem(key); // an older address's copy
+    }
+  } catch {
+    // full or unavailable: next time opens the slow way
+  }
+}
+
+function dropSnapshot() {
+  try {
+    localStorage.removeItem(snapshotKey);
+  } catch {
+    // nothing saved then
+  }
+}
+
+/** "обновляется…" in the header while Google is asked; one node, so showing it redraws nothing. */
+const syncBadge = h('span', { class: 'top-sync', hidden: true }, 'обновляется…');
+
+function setSyncing(on) {
+  syncBadge.hidden = !on;
+}
+
+let syncing = null;
+
+/**
+ * Asks Google for the list and shows it; one request at a time. `quiet`: if it fails,
+ * keep showing what's there without a word (used when the app comes back to the front).
+ */
+function sync({ quiet = false } = {}) {
+  syncing ||= pull(quiet).finally(() => {
+    syncing = null;
+  });
+  return syncing;
+}
+
+async function pull(quiet) {
+  const since = editSeq;
+  setSyncing(true);
+  try {
+    const { me, items } = await API.list();
+    setSyncing(false);
+    const merged = withLocalEdits(items, since);
+    const changed = !state.loaded || JSON.stringify([me, merged]) !== JSON.stringify([state.me, state.items]);
+    Object.assign(state, { me, items: merged, loaded: true });
+    if (!changed) return; // the same list as on screen (and saved): nothing moves
+    saveSnapshot();
+    refreshAll();
+  } catch (error) {
+    setSyncing(false);
+    const refused = error.code === 'meet_bot' || error.status === 403;
+    if (refused) dropSnapshot();
+    if (!state.loaded || refused || error.status === 401) showLoadError(error);
+    else if (!quiet) toast('Не удалось обновить — показан сохранённый список', 'error');
+  }
+}
+
+function showLoadError(error) {
+  for (const sheet of [...sheets]) sheet.close();
+  Object.assign(state, { me: null, items: [], loaded: false });
+  state.error =
+    error.code === 'meet_bot'
+      ? {
+          title: 'Познакомьтесь с ботом',
+          text: `${error.message} Нажмите кнопку ниже, в чате с ботом нажмите «Старт» и откройте вишлист снова.`,
+          action: h('button', { type: 'button', class: 'button primary', onclick: () => openBotChat(error.bot) }, 'Познакомиться с ботом'),
+        }
+      : error.status === 403
+        ? { emoji: '🔒', title: 'Только для своих', text: `${error.message} Попросите админа добавить вас в группу HOROVOD.` }
+        : { title: 'Не удалось загрузить вишлист', text: error.message, retry: true };
+  render();
 }
 
 /** What happened to the group post, for the toast after a save. */
@@ -211,29 +341,24 @@ async function save(id, patch, message) {
   }
 }
 
-async function toggleVote(item) {
+async function toggleVote(id) {
+  // By id: the card may have been drawn from an older copy of the list.
+  const item = state.items.find((candidate) => candidate.id === id);
+  if (!item) return;
   haptic.tap();
   const before = { votes: item.votes, voted: item.voted, voters: item.voters };
   item.voted = !item.voted;
   item.votes += item.voted ? 1 : -1;
+  noteEdit(id, item, true);
   refreshAll();
   try {
-    const { item: updated } = await API.vote(item.id);
+    const { item: updated } = await API.vote(id);
     upsert(updated);
   } catch (error) {
     Object.assign(item, before);
+    edits.delete(id);
     refreshAll();
     toast(error.message, 'error');
-  }
-}
-
-async function reload() {
-  try {
-    const { items } = await API.list();
-    state.items = items;
-    refreshAll();
-  } catch {
-    // Keep showing what we have.
   }
 }
 
@@ -241,20 +366,81 @@ async function reload() {
 // Pieces used in several places
 // ---------------------------------------------------------------------------
 
-/** If Google's picture address fails, try Drive's other public address once. */
+/** If Google's picture address fails, try Drive's other public address once, at the same size. */
 function driveFallback(event) {
-  const match = /lh3\.googleusercontent\.com\/d\/([\w-]+)/.exec(event.target.src);
-  if (match) event.target.src = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1000`;
+  const src = event.target.getAttribute('src');
+  const match = /lh3\.googleusercontent\.com\/d\/([\w-]+)(?:=w(\d+))?/.exec(src);
+  if (match) event.target.src = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w${match[2] || 1000}`;
+}
+
+// Cards are about 170px wide (×3 on a phone screen), so they ask Google for a ~480px copy
+// instead of the 1000px one the details show. Shop pictures come as they are.
+const CARD_WIDTH = 480;
+
+function sizedImage(url, width) {
+  const match = /^(https:\/\/lh3\.googleusercontent\.com\/d\/[\w-]+)(=w\d+)?$/.exec(url || '');
+  return match ? `${match[1]}=w${width}` : url;
+}
+
+/** Pictures already shown here: drawn again, they appear at once instead of waiting to be lazy-loaded. */
+const loadedImages = new Set();
+
+// Card pictures load once they come within ~300px of the screen. The browser's own
+// loading="lazy" starts 1250–2500px ahead, which on a phone is nearly the whole list.
+const nearScreen = (() => {
+  if (!('IntersectionObserver' in window)) return null;
+  const show = (entries, observer) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      entry.target.src = entry.target.dataset.src;
+    }
+  };
+  const options = { rootMargin: '300px 0px' };
+  try {
+    return new IntersectionObserver(show, { ...options, root: document }); // the margin counts inside Telegram's iframe too
+  } catch {
+    return new IntersectionObserver(show, options);
+  }
+})();
+
+function picture(src, { lazy = true } = {}) {
+  const later = lazy && !loadedImages.has(src);
+  const img = h('img', {
+    loading: later && !nearScreen ? 'lazy' : null, // before src, so it counts
+    decoding: 'async',
+    src: later && nearScreen ? null : src,
+    'data-src': later && nearScreen ? src : null,
+    alt: '',
+    onload: (event) => loadedImages.add(event.target.getAttribute('src')),
+    onerror: driveFallback,
+  });
+  if (later && nearScreen) nearScreen.observe(img);
+  return img;
 }
 
 function thumb(item, { hero = false } = {}) {
   const base = hero ? 'hero' : 'thumb';
   if (item.imageUrl) {
-    return h(
-      'div',
-      { class: `${base}${item.imageSource === 'upload' ? ' cover' : ''}` },
-      h('img', { src: item.imageUrl, alt: '', loading: 'lazy', decoding: 'async', onerror: driveFallback }),
-    );
+    const full = item.imageUrl;
+    const small = sizedImage(full, CARD_WIDTH);
+    let src = hero ? full : small;
+    let sharpen = false;
+    // Details open with the card's small copy (already here) and sharpen once the big one loads.
+    if (hero && src !== small && !loadedImages.has(full) && loadedImages.has(small)) {
+      src = small;
+      sharpen = true;
+    }
+    const img = picture(src, { lazy: !hero });
+    if (sharpen) {
+      const big = new Image();
+      big.onload = () => {
+        loadedImages.add(full);
+        img.src = full;
+      };
+      big.src = full;
+    }
+    return h('div', { class: `${base}${item.imageSource === 'upload' ? ' cover' : ''}` }, img);
   }
   return h(
     'div',
@@ -305,12 +491,34 @@ function voteButton(item, { withLabel = false } = {}) {
       class: `vote${item.voted ? ' voted' : ''}`,
       'aria-pressed': String(item.voted),
       'aria-label': item.voted ? 'Убрать голос' : 'Проголосовать',
-      onclick: stop(() => toggleVote(item)),
+      onclick: stop(() => toggleVote(item.id)),
     },
     heartIcon(),
     withLabel ? h('span', {}, item.voted ? 'Вам нравится' : 'Нравится') : null,
     item.votes ? h('span', { class: 'vote-count' }, item.votes) : null,
   );
+}
+
+/**
+ * Built cards ("kind id" → { key, node }), used again while their wish looks the same:
+ * a vote or Google's answer then rebuilds only the cards that changed, and the other
+ * pictures stay put instead of blinking.
+ */
+const cards = new Map();
+
+function card(kind, item, build) {
+  const key = `${today()} ${currency()} ${JSON.stringify(item)}`;
+  const slot = `${kind} ${item.id}`;
+  const built = cards.get(slot);
+  if (built?.key === key) return built.node;
+  const node = build(item);
+  cards.set(slot, { key, node });
+  return node;
+}
+
+function forgetGoneCards() {
+  const ids = new Set(state.items.map((item) => item.id));
+  for (const slot of cards.keys()) if (!ids.has(slot.slice(slot.indexOf(' ') + 1))) cards.delete(slot);
 }
 
 /** Wishlist grid tile: picture first, the plan date and votes sit on the picture. */
@@ -429,6 +637,7 @@ function header() {
       { class: 'top-brand' },
       h('span', { class: 'eye', 'aria-hidden': 'true' }),
       h('span', { class: 'kicker' }, 'HOROVOD · Хаб'),
+      syncBadge,
     ),
     h('h1', {}, 'Вишлист'),
     API.demo ? h('p', { class: 'demo-note' }, 'Демо-режим: пример данных, изменения видны только на этом устройстве') : null,
@@ -444,7 +653,10 @@ function header() {
 
 function nextPurchase(planned) {
   const next = planned.filter((item) => item.plannedDate).sort(compareItems('schedule'))[0];
-  if (!next) return null;
+  return next ? card('next', next, nextButton) : null;
+}
+
+function nextButton(next) {
   const plan = describePlan(next, today());
   const total = itemTotal(next);
   return h(
@@ -568,7 +780,7 @@ function wishlistContent() {
     .filter((item) => !query || `${item.title} ${item.note} ${hostOf(item.link)}`.toLowerCase().includes(query))
     .sort(compareItems(state.sort));
   if (!list.length) return emptyState('🔍', 'Ничего не найдено', 'Попробуйте другой запрос или категорию.');
-  return h('div', { class: 'tiles' }, list.map(tile));
+  return h('div', { class: 'tiles' }, list.map((item) => card('tile', item, tile)));
 }
 
 function planContent() {
@@ -609,7 +821,7 @@ function planContent() {
           total: group.total,
           missing: group.missing,
         }),
-        h('div', { class: 'rows' }, group.items.map(planRow)),
+        h('div', { class: 'rows' }, group.items.map((item) => card('plan', item, planRow))),
       ),
     ),
   ];
@@ -647,10 +859,12 @@ function boughtContent() {
             'div',
             { class: 'rows' },
             group.items.map((item) =>
-              row(item, {
-                when: item.boughtAt ? `Куплено ${formatDay(item.boughtAt, today())}` : 'Куплено',
-                price: item.boughtPrice ?? itemTotal(item),
-              }),
+              card('bought', item, () =>
+                row(item, {
+                  when: item.boughtAt ? `Куплено ${formatDay(item.boughtAt, today())}` : 'Куплено',
+                  price: item.boughtPrice ?? itemTotal(item),
+                }),
+              ),
             ),
           ),
         ),
@@ -672,7 +886,7 @@ function boughtContent() {
         `${state.showDropped ? 'Скрыть' : 'Показать'} отменённые (${dropped.length})`,
       ),
       state.showDropped
-        ? h('div', { class: 'rows' }, dropped.map((item) => row(item, { when: 'Отменено', price: itemTotal(item) })))
+        ? h('div', { class: 'rows' }, dropped.map((item) => card('dropped', item, () => row(item, { when: 'Отменено', price: itemTotal(item) }))))
         : null,
     );
   }
@@ -688,6 +902,17 @@ function content() {
 function renderContent() {
   const node = document.getElementById('content');
   if (node) fill(node, content());
+}
+
+/** After a data change: redraws what shows the data, leaving the search box alone (typing, the keyboard). */
+function renderData() {
+  const app = document.getElementById('app');
+  const top = app.querySelector('.top');
+  const nav = app.querySelector('.tabs');
+  if (state.error || !state.loaded || !top || !nav) return render();
+  top.replaceWith(header());
+  nav.replaceWith(tabs());
+  renderContent();
 }
 
 function render() {
@@ -1027,9 +1252,11 @@ function deleteButton(item, sheet) {
         if (!(await confirmAction('Удалить это желание навсегда?'))) return;
         try {
           await API.remove(item.id);
+          noteEdit(item.id, null);
           state.items = state.items.filter((candidate) => candidate.id !== item.id);
           sheet.close();
           refreshAll();
+          saveSnapshot();
           toast('Удалено');
         } catch (error) {
           toast(error.message, 'error');
@@ -1494,8 +1721,6 @@ async function boot() {
     applyTheme();
     tg.onEvent('themeChanged', applyTheme);
   }
-  render();
-
   if (!initData && !API.demo) {
     state.error = {
       emoji: '📱',
@@ -1506,34 +1731,29 @@ async function boot() {
     return;
   }
 
-  try {
-    const { me, items } = await API.list();
-    state.me = me;
-    state.items = items;
-    state.loaded = true;
-  } catch (error) {
-    state.error =
-      error.code === 'meet_bot'
-        ? {
-            title: 'Познакомьтесь с ботом',
-            text: `${error.message} Нажмите кнопку ниже, в чате с ботом нажмите «Старт» и откройте вишлист снова.`,
-            action: h('button', { type: 'button', class: 'button primary', onclick: () => openBotChat(error.bot) }, 'Познакомиться с ботом'),
-          }
-        : error.status === 403
-          ? { emoji: '🔒', title: 'Только для своих', text: `${error.message} Попросите админа добавить вас в группу HOROVOD.` }
-          : { title: 'Не удалось загрузить вишлист', text: error.message, retry: true };
-    render();
-    return;
-  }
-
   const start = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get('startapp') || '';
   if (start === 'plan') state.tab = 'plan';
+  let startItem = start.startsWith('item_') ? start.slice(5) : '';
+  const openStartItem = () => {
+    if (startItem && state.items.some((item) => item.id === startItem)) {
+      openDetail(startItem);
+      startItem = '';
+    }
+  };
+
+  // Last time's list shows at once (a spinner the very first time); Google's answer follows.
+  const saved = readSnapshot();
+  if (saved) Object.assign(state, { me: saved.me, items: saved.items, loaded: true });
   render();
-  if (start.startsWith('item_') && state.items.some((item) => item.id === start.slice(5))) openDetail(start.slice(5));
+  openStartItem();
+
+  await sync();
+  if (state.error) return;
+  openStartItem(); // a wish newer than the saved list
 
   // Pick up what others added while the app was in the background.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) reload();
+    if (!document.hidden) sync({ quiet: true });
   });
 }
 

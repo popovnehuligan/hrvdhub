@@ -126,6 +126,7 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: (k) => (k in properties ? properties[k] : null),
+        getProperties: () => ({ ...properties }),
         setProperty: (k, v) => { properties[k] = v; },
       }),
     },
@@ -135,10 +136,11 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
         put: (k, v) => cache.set(k, v),
         getAll: (keys) => Object.fromEntries(keys.filter((k) => cache.has(k)).map((k) => [k, cache.get(k)])),
         putAll: (values) => Object.entries(values).forEach(([k, v]) => cache.set(k, v)),
-        removeAll() {},
+        remove: (k) => cache.delete(k),
+        removeAll: (keys) => keys.forEach((k) => cache.delete(k)),
       }),
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     Utilities: {
       computeHmacSha256Signature: (value, key) =>
         signed(crypto.createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),

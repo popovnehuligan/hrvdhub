@@ -191,6 +191,25 @@ p {
   color: #d9a55e;
 }
 
+/* Shown while the saved list is being refreshed from Google. */
+.top-sync {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(246, 242, 233, 0.55);
+  animation: sync-pulse 1.8s ease-in-out infinite;
+}
+
+.top-sync[hidden] {
+  display: none;
+}
+
+@keyframes sync-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .top h1 {
   font-size: 44px;
   font-weight: 800;
