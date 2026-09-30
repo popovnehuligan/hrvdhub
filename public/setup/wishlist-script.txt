@@ -694,6 +694,14 @@ function handle(action, p, user) {
       items: readWishes().map(view(user))
     };
   }
+  // Moving to another server: the raw wishes (with voters' ids), for the group's admins only.
+  if (action === 'export') {
+    if (!user.isAdmin) fail('Только для админов', 403);
+    return { wishes: loadWishes().wishes, props: { GROUP_CHAT_ID: prop('GROUP_CHAT_ID'), TOPIC_ID: prop('TOPIC_ID'),
+      NOTIFY_CHAT_ID: prop('NOTIFY_CHAT_ID'), ADMIN_IDS: prop('ADMIN_IDS'), ACCESS_GROUPS: prop('ACCESS_GROUPS'),
+      BOT_USERNAME: prop('BOT_USERNAME'), BOT_HAS_MAIN_APP: prop('BOT_HAS_MAIN_APP'), APP_LINK: prop('APP_LINK'),
+      CURRENCY: prop('CURRENCY'), REMINDER_HOUR: prop('REMINDER_HOUR') } };
+  }
   if (action === 'preview') return preview(p.url);
   if (action === 'upload') return upload(p.photo);
   if (['create', 'vote', 'update', 'delete'].indexOf(action) < 0) fail('Неизвестное действие');

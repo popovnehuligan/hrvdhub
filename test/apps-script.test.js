@@ -524,3 +524,13 @@ test('cache entries are cut between characters, never inside an emoji', () => {
     assert.equal(gas.context.cachedWishes()[0].title, title);
   }
 });
+
+test('admins can export the raw wishes for a move; members cannot', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', TOPIC_ID: '77', BOT_USERNAME: 'b' }, members, pages: shop });
+  gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  assert.equal(gas.call('export', {}, member).status, 403);
+  const out = gas.call('export', {}, admin);
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.data.wishes[0].title, 'Микрофон');
+  assert.equal(out.data.props.TOPIC_ID, '77');
+});
