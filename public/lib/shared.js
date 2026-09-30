@@ -336,8 +336,8 @@ export function normalizeLink(value) {
   return link;
 }
 
-/** Image references: a Google Drive file id, or a web/relative address (demo pictures). */
-const IMAGE_REF = /^(drive:[\w-]{10,200}|https:\/\/\S{1,2000}|demo\/img\/[\w-]+\.(png|jpe?g|webp)|data:image\/(jpeg|png|webp);base64,[\w+/=]+)$/;
+/** Image references: a Google Drive file id, a photo kept by the Cloudflare server, or a web/relative address (demo pictures). */
+const IMAGE_REF = /^(drive:[\w-]{10,200}|photo:[\w-]{6,64}|https:\/\/\S{1,2000}|demo\/img\/[\w-]+\.(png|jpe?g|webp)|data:image\/(jpeg|png|webp);base64,[\w+/=]+)$/;
 
 /**
  * Turns input into a clean patch. Only fields present in the input are touched.

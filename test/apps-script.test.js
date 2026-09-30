@@ -534,3 +534,14 @@ test('admins can export the raw wishes for a move; members cannot', () => {
   assert.equal(out.data.wishes[0].title, 'Микрофон');
   assert.equal(out.data.props.TOPIC_ID, '77');
 });
+
+test('after the move the Google script shows the list but takes no changes, posts or reminders', () => {
+  const gas = createGas({ props: { GROUP_CHAT_ID: '-100555', MOVED_TO: 'https://x.workers.dev/' }, members, pages: shop });
+  assert.equal(gas.call('list', {}, member).ok, true);
+  const refused = gas.call('create', { wish: { title: 'Микрофон', link: 'https://shop.example/sm58' } }, member);
+  assert.deepEqual([refused.status, /переехал/.test(refused.error)], [410, true]);
+  assert.equal(gas.call('export', {}, admin).ok, true, 'export still works, for the last sync');
+  gas.context.dailyReminders();
+  gas.context.autoUpdate();
+  assert.equal(gas.telegram.filter((c) => /^send/.test(c.method)).length, 0);
+});

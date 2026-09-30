@@ -1,0 +1,8 @@
+{
+  "name": "hrvd-wishlist-worker",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "4.144.0"
+  }
+}

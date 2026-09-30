@@ -26,6 +26,9 @@
 var PASTED_BOT_TOKEN = '';
 
 var DEFAULT_APP_URL = 'https://popovnehuligan.github.io/hrvdhub/';
+// The wishlist moved to a Cloudflare Worker (worker/). This script now only answers the app copies
+// Telegram still has cached: it shows the list but takes no changes, posts and reminders.
+var MOVED_TO = 'https://hrvd-wishlist.horovod.workers.dev/';
 var AVATAR_VERSION = 'wishlist-avatar-1';
 var BOT_DESCRIPTION = 'Вишлист HOROVOD: всё, что нужно купить для Хаба — инструменты, техника и остальное.\n\n' +
   'Добавляйте желания с фото или ссылкой на магазин, голосуйте за нужное и смотрите, что и когда мы планируем купить.\n\n' +
@@ -227,6 +230,7 @@ function handle(action, p, user) {
       BOT_USERNAME: prop('BOT_USERNAME'), BOT_HAS_MAIN_APP: prop('BOT_HAS_MAIN_APP'), APP_LINK: prop('APP_LINK'),
       CURRENCY: prop('CURRENCY'), REMINDER_HOUR: prop('REMINDER_HOUR') } };
   }
+  if (MOVED_TO && action !== 'export') fail('Вишлист переехал на новый сервер. Закройте его и откройте снова', 410);
   if (action === 'preview') return preview(p.url);
   if (action === 'upload') return upload(p.photo);
   if (['create', 'vote', 'update', 'delete'].indexOf(action) < 0) fail('Неизвестное действие');
@@ -878,6 +882,7 @@ function catchUpPosts() {
 
 /** Runs every morning (setup() installs the trigger): one message about purchases that are due. */
 function dailyReminders() {
+  if (MOVED_TO) return; // the new server sends the morning reminder now
   var chat = notifyChat();
   if (!chat) return;
   var now = today();
@@ -975,6 +980,7 @@ function checkCode(code) {
 /** Hourly trigger (setup installs it). */
 function autoUpdate() {
   try { refreshCode() } catch (e) { console.warn('Автообновление: ' + e.message) }
+  if (MOVED_TO) return; // the new server posts and learns groups now
   try { catchUpPosts() } catch (e) { console.warn('Досылка: ' + e.message) }
   try { learnGroups() } catch (e) { console.warn('Группы: ' + e.message) }
 }

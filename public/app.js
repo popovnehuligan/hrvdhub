@@ -379,7 +379,10 @@ const CARD_WIDTH = 480;
 
 function sizedImage(url, width) {
   const match = /^(https:\/\/lh3\.googleusercontent\.com\/d\/[\w-]+)(=w\d+)?$/.exec(url || '');
-  return match ? `${match[1]}=w${width}` : url;
+  if (match) return `${match[1]}=w${width}`;
+  // Photos kept by our server: it has a small copy for the cards.
+  const ours = /^(https:\/\/[^/]+\/photo\/[\w-]+)(\?w=\d+)?$/.exec(url || '');
+  return ours ? (width <= 600 ? `${ours[1]}?w=${width}` : ours[1]) : url;
 }
 
 /** Pictures already shown here: drawn again, they appear at once instead of waiting to be lazy-loaded. */
@@ -1536,7 +1539,9 @@ function openForm(existing) {
     drawImage();
     validate();
     try {
-      const result = await API.upload(await shrinkImage(file));
+      // The server keeps a ~480px copy for the cards, next to the photo itself.
+      const [photo, thumb] = await Promise.all([shrinkImage(file), shrinkImage(file, CARD_WIDTH)]);
+      const result = await API.upload(photo, thumb);
       Object.assign(form, { image: result.image, imageUrl: result.imageUrl, imageSource: 'upload' });
       haptic.success();
     } catch (error) {

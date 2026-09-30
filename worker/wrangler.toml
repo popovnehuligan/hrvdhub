@@ -1,0 +1,26 @@
+# HOROVOD · Вишлист backend. Deploy: see README (npx wrangler deploy from this folder).
+name = "hrvd-wishlist"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+account_id = "19657a445252a6081236e6f6aee7b405"
+workers_dev = true
+
+[vars]
+PUBLIC_URL = "https://hrvd-wishlist.horovod.workers.dev"
+
+# Hourly: posts that didn't go through, groups the bot was added to, the morning reminder.
+[triggers]
+crons = ["7 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hrvd-wishlist"
+database_id = "3906966f-4277-43f8-9463-51484ae54bab"
+
+[[kv_namespaces]]
+binding = "PHOTOS"
+id = "fe00fcff66164ec4a1a108129116a446"
+
+[observability]
+enabled = true
+preview_urls = false

@@ -79,7 +79,7 @@ function liveApi(url, initData, early) {
     vote: (id) => call('vote', { id }),
     remove: (id) => call('delete', { id }),
     preview: (link) => call('preview', { url: link }),
-    upload: (photo) => call('upload', { photo }),
+    upload: (photo, thumb) => call('upload', { photo, thumb }),
   };
 }
 

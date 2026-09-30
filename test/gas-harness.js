@@ -174,6 +174,8 @@ export function createGas({ props = {}, members = {}, pages = {}, tg = () => nul
   vm.createContext(context);
   const code = ['apps-script/Shared.gs', 'apps-script/Code.gs'].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   vm.runInContext(code, context, { filename: 'apps-script' });
+  // The script now runs in "moved" mode (MOVED_TO); these tests check how it works when it's the backend.
+  if (!('MOVED_TO' in props)) context.MOVED_TO = '';
 
   function call(action, payload = {}, user) {
     const initData = user ? signInitDataForTests(user, BOT_TOKEN) : '';
