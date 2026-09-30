@@ -35,85 +35,32 @@ bot, inside Telegram. The app and the bot's messages are in Russian.
 - Bot commands: `/wishlist` opens the app, `/plan` lists the purchase plan, and `/chatid` shows a
   chat's ID (for setup).
 
-## How it runs (same as the bar bot)
-
-No server to rent, like [horovodart/hrvdbarbot](https://github.com/horovodart/hrvdbarbot):
+## How it runs
 
 | Part | Where |
 |---|---|
 | The screens (`public/`) | **GitHub Pages**, free: `https://popovnehuligan.github.io/hrvdhub/` |
-| The data | a **Google Sheet** «HOROVOD · Вишлист» on horovod.info@gmail.com (sheet `wishes`) |
-| The logic behind it (`apps-script/`) | **Google Apps Script** attached to that sheet: checks Telegram logins, saves wishes, fetches pictures from shop links, posts to the group, sends the morning reminder |
-| Photos | a Google Drive folder «HOROVOD Вишлист — фото» |
-| The address of the script | `public/config.js` |
+| The server (`worker/`) | **Cloudflare Workers**, free: `https://hrvd-wishlist.horovod.workers.dev` — answers in ~0.2 s and never sleeps |
+| The data | Cloudflare **D1** database `hrvd-wishlist` (tables `wishes`, `votes`, `props`, `rids`, see `worker/schema.sql`) |
+| Photos | Cloudflare **KV** `hrvd-wishlist-photos` (each with a ~480px copy for the cards); photos from before the move stay on Google Drive |
+| Hourly job | Cloudflare cron: posts that didn't go through, groups the bot was added to, the morning reminder |
+| The server's address | `public/config.js` |
 
-Until `public/config.js` has the script's address, the app runs in **demo mode**: it shows a sample
-wishlist and keeps changes only on that device. Useful for looking around; the team needs the live mode.
+The server was a Google Apps Script (`apps-script/`) until 30.09.2026; it took up to 20 s to wake
+up. It still answers app copies Telegram has cached (the list only, no changes: `MOVED_TO`), and can
+be switched off in its Apps Script editor once nobody uses the old copies.
 
-## Setting it up
+### Deploying the server
 
-You need: a **new bot** from @BotFather for the wishlist (not the bar bot's or Podmoga's), and the
-horovod.info@gmail.com Google account.
-
-1. **GitHub Pages.** Repository Settings → Pages → Source: **GitHub Actions**. Merge this work into
-   `main`; the app is published at `https://popovnehuligan.github.io/hrvdhub/` a minute later.
-2. **Google side, automatically** (on a computer with Node.js, like the bar bot's `deploy.sh`):
-   ```sh
-   npx @google/clasp login      # once, sign in as horovod.info@gmail.com
-   tools/deploy.sh
-   ```
-   The first run creates the Google Sheet with its script, publishes the script as a web app, writes
-   its address into `public/config.js` and pushes to `main`.
-3. **Properties.** In the sheet: Extensions → Apps Script → Project Settings → Script Properties:
-   - `BOT_TOKEN`: the wishlist bot's token;
-   - `APP_URL`: `https://popovnehuligan.github.io/hrvdhub/`.
-4. **Group.** Add the bot to the HOROVOD group and write any message there.
-5. **setup().** In the Apps Script editor pick the function `setup` → Run → allow the access Google
-   asks for. It finds the group, puts the «Вишлист» button on the bot and turns on the morning
-   reminder. The log shows what it did.
-6. Optional, for the «Открыть в вишлисте» buttons in group posts: BotFather → the bot → Bot Settings →
-   Configure Mini App → Enable, with the same address.
-
-Without step 2's script you can do the same by hand, as in the bar bot's README: create the sheet,
-paste `apps-script/Code.gs`, `apps-script/Shared.gs` and `appsscript.json` into its Apps Script,
-Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), and put the `…/exec`
-address into `public/config.js`.
-
-### The script updates itself
-
-The script is pasted into Google once (`public/update.html`: paste, run `setup`, deploy a new
-version). After that, at the start of every run it switches to the latest code published on
-GitHub Pages (`setup/wishlist-script.txt`), so changes go live without pasting or deploying.
-The published code sits in the script's cache for up to 6 hours and is refreshed every hour
-(`autoUpdate`) and right away on a POST `{"action":"refreshCode"}` to the web app. A download that
-isn't the wishlist script or doesn't parse is never used; the pasted copy keeps working.
-`GET …/exec` shows the running version: the first 12 hex digits of the code's SHA-256, or
-`pasted`.
-
-### When the bot is quiet in the group
-
-In the Apps Script editor pick the function `check` → Run. It checks the group, the topic and the
-bot's rights, fixes a group that changed its address, shows the last error Telegram gave, and posts
-a test message about the newest wish. The log says what's wrong in plain words.
-
-### The bot's look
-
-`setup()` also gives the bot its profile picture (`public/brand/bot-avatar.jpg`, drawn in the style of
-the bar bot's icon: a gift box with a mic and a guitar, the HRVD and eye stickers, «WISHLIST»), its
-description and the «Вишлист» menu button. The picture's source is `public/brand/bot-avatar.svg`.
-To change the picture: replace the files and bump `AVATAR_VERSION` in `apps-script/Code.gs`.
-
-### Script properties
-
-| Property | What it's for |
-| --- | --- |
-| `BOT_TOKEN` | **Required.** Lives only in the script's properties, never in the app or in git. |
-| `GROUP_CHAT_ID` | The HOROVOD group: its members can use the app, its admins are app admins. `setup()` fills it in. |
-| `ADMIN_IDS` | Extra admins by Telegram id, comma separated. |
-| `ACCESS_GROUPS` | Other groups whose members may use the app. Filled in by itself: when an admin of the main group adds the bot to another group, the hourly check notices it (and forgets the group when the bot is removed). |
-| `APP_URL` | The GitHub Pages address, for the bot's menu button. |
-| `NOTIFY_CHAT_ID` | Post news and reminders to another chat than the group. |
-| `CURRENCY`, `REMINDER_HOUR` | Default `EUR` and 10 (Bratislava time). |
+```sh
+cd worker && npm install
+export CLOUDFLARE_API_TOKEN=…   # a token with "Edit Cloudflare Workers" + D1 Edit
+npx wrangler deploy --var VERSION:$(git rev-parse --short HEAD)
+```
+The bot key is a Worker secret (`npx wrangler secret put BOT_TOKEN`). Settings (`GROUP_CHAT_ID`,
+`TOPIC_ID`, `ADMIN_IDS`, `NOTIFY_CHAT_ID`, `CURRENCY`, `REMINDER_HOUR`, `ACCESS_GROUPS`, …) live in the
+`props` table: `npx wrangler d1 execute hrvd-wishlist --remote --command "…"`.
+`GET /` shows the version and a status without names or ids.
 
 ## Development
 
