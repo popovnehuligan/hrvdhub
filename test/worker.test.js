@@ -211,3 +211,21 @@ test('worker: admins export everything, with voters', async () => {
   const out = await w.call('export', {}, admin);
   assert.deepEqual(out.data.wishes[0].votes, [{ id: 3, name: 'Богдан' }]);
 });
+
+test('worker: «8.499» is eight thousand, and editing the price corrects the card in the group', async () => {
+  const w = world();
+  const created = await w.call('create', { wish: { title: 'Ford Transit', link: 'https://autobazar.example/ford', price: '8.499' } }, member);
+  assert.equal(created.data.item.price, 8499);
+  assert.match(w.of('sendMessage').at(-1).params.text, /Цена: 8\s499\s€/);
+  const id = created.data.item.id;
+  await w.call('update', { id, patch: { price: '7 990' } }, member);
+  const edit = w.of('editMessageText').at(-1) || w.of('editMessageCaption').at(-1);
+  assert.ok(edit, 'the card is edited');
+  assert.match(edit.params.text || edit.params.caption, /7\s990/);
+  assert.equal(edit.params.message_id, 101);
+  const before = w.sent.length;
+  await w.call('vote', { id }, other);
+  await w.call('update', { id, patch: { planned: false } }, admin);
+  assert.equal(w.sent.filter((c) => /^edit/.test(c.method)).length, 1, 'other changes leave the card alone');
+  assert.ok(w.sent.length >= before);
+});

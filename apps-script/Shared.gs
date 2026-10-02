@@ -315,9 +315,22 @@ function text(value, label, max, required = false) {
   return trimmed;
 }
 
+/**
+ * "8.499" and "1,299" are thousands (how prices are written here); "8,50", "8.5" and "1 299,90" have
+ * cents: a separator followed by one or two digits at the end marks cents, every other one is dropped.
+ */
+function parseAmount(value) {
+  if (typeof value === 'number') return value;
+  const digits = String(value).replace(/[\s\u00a0\u202f'€$]/g, '').replace(/eur$/i, '');
+  if (!/^\d[\d.,]*$/.test(digits)) return NaN;
+  const cents = digits.match(/[.,](\d{1,2})$/);
+  const whole = (cents ? digits.slice(0, -cents[0].length) : digits).replace(/[.,]/g, '');
+  return Number(`${whole}${cents ? `.${cents[1]}` : ''}`);
+}
+
 function money(value, label) {
   if (value === '' || value == null) return null;
-  const number = typeof value === 'number' ? value : Number(String(value).replace(/\s/g, '').replace(',', '.'));
+  const number = parseAmount(value);
   if (!Number.isFinite(number) || number < 0 || number > 10000000) throw new WishError(`${label}: неверное значение`);
   return Math.round(number * 100) / 100;
 }
@@ -454,7 +467,7 @@ function toggleVote(wish, user) {
 /** What the Mini App gets to see of a wish. `imageUrl` turns an image reference into an address. */
 function publicWish(wish, userId, imageUrl) {
   // Voters' ids and the server's bookkeeping (reminders, the group post) stay on the server.
-  const { votes, remindedFor, postedAt, postMessageId, postTries, ...rest } = wish;
+  const { votes, remindedFor, postedAt, postMessageId, postTries, postKind, ...rest } = wish;
   return {
     ...rest,
     imageUrl: wish.image ? imageUrl(wish.image) : null,

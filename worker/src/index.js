@@ -344,6 +344,7 @@ async function handle(a, action, p, user) {
     await saveWish(a, next);
     const kind = result.becameBought ? 'bought' : result.becamePlanned ? 'planned' : result.planMoved ? 'moved' : null;
     const sent = kind ? await notify(a, kind, next, user) : null;
+    await correctCard(a, current, next);
     return { item: view(next), posted: sent ? Boolean(sent.ok) : null };
   }
 
@@ -755,10 +756,14 @@ async function post(a, wish, text, options = {}) {
     // A reply points at the card with the picture already; the picture again would only repeat it.
     let photo = await photoBlob(a, wish.image);
     if (!photo && /^(drive:|https:\/\/)/.test(wish.image)) photo = imageUrl(a, wish.image);
-    if (photo) result = await sendTo(a, 'sendPhoto', { ...params, photo, caption: shorten(text, 1000) });
+    if (photo) {
+      result = await sendTo(a, 'sendPhoto', { ...params, photo, caption: shorten(text, 1000) });
+      if (result.ok) result.via = 'photo';
+    }
   }
   if (!result || !result.ok) {
     result = await sendTo(a, 'sendMessage', { ...params, text, link_preview_options: { is_disabled: true } });
+    if (result.ok) result.via = 'text';
   }
   if (result.ok) {
     if (prop(a, 'LAST_POST_ERROR')) await setProp(a, 'LAST_POST_ERROR', '');
@@ -773,19 +778,48 @@ async function post(a, wish, text, options = {}) {
  * The group's posts. Each kind opens with its own marker line in capitals, so they are told apart
  * at a glance: 🆕 new wish (a picture card), 📅 planned or moved, ✅ bought (replies to the card).
  */
+/** The text of a new wish's card in the group; also used to correct the card after an edit. */
+function cardText(wish) {
+  const category = findOption(CATEGORIES, wish.category);
+  const priority = findOption(PRIORITIES, wish.priority);
+  const lines = ['🆕 <b>НОВОЕ ЖЕЛАНИЕ</b>', '', `<b>${escapeHtml(wish.title)}</b>`, `${category.label} · ${priority.label}`];
+  if (priceText(wish)) lines.push(`Цена: ${priceText(wish)}`);
+  if (wish.note) lines.push('', `<i>${escapeHtml(shorten(wish.note, 300))}</i>`);
+  if (wish.planned) lines.push('', `📅 В плане: ${planText(wish)}`);
+  lines.push('', `Добавил(а): ${escapeHtml(wish.createdBy.name)}`);
+  return lines.join('\n');
+}
+
+const CARD_FIELDS = ['title', 'price', 'quantity', 'currency', 'note', 'category', 'priority'];
+
+/**
+ * The wish's card in the group was posted with what the wish said then. After an edit of its title,
+ * price or note the card is corrected in place, so the group never keeps a wrong price.
+ */
+async function correctCard(a, before, wish) {
+  if (!wish.postMessageId || !CARD_FIELDS.some((k) => before[k] !== wish[k])) return null;
+  await loadProps(a);
+  const chat = notifyChat(a);
+  if (!chat) return null;
+  const params = { chat_id: chat, message_id: Number(wish.postMessageId), parse_mode: 'HTML' };
+  const button = openButton(a, `item_${wish.id}`, 'Открыть и проголосовать');
+  if (button) params.reply_markup = button;
+  const text = cardText(wish);
+  const asCaption = () => tgTry(a, 'editMessageCaption', { ...params, caption: shorten(text, 1000) });
+  const asText = () => tgTry(a, 'editMessageText', { ...params, text, link_preview_options: { is_disabled: true } });
+  // Cards from before postKind was kept: a picture card most likely, else a text one.
+  let result = await (wish.postKind === 'text' ? asText() : asCaption());
+  if (!result.ok && !wish.postKind && !/not modified/i.test(result.description || '')) result = await asText();
+  return result;
+}
+
 function notify(a, kind, wish, actor) {
   const who = actor ? escapeHtml(userRef(actor).name) : '';
   const title = `<b>${escapeHtml(wish.title)}</b>`;
   let lines;
   let options = {};
   if (kind === 'added') {
-    const category = findOption(CATEGORIES, wish.category);
-    const priority = findOption(PRIORITIES, wish.priority);
-    lines = ['🆕 <b>НОВОЕ ЖЕЛАНИЕ</b>', '', title, `${category.label} · ${priority.label}`];
-    if (priceText(wish)) lines.push(`Цена: ${priceText(wish)}`);
-    if (wish.note) lines.push('', `<i>${escapeHtml(shorten(wish.note, 300))}</i>`);
-    if (wish.planned) lines.push('', `📅 В плане: ${planText(wish)}`);
-    lines.push('', `Добавил(а): ${escapeHtml(wish.createdBy.name)}`);
+    lines = [cardText(wish)];
     options.button = 'Открыть и проголосовать';
   } else if (kind === 'planned' || kind === 'moved') {
     lines = [`📅 <b>${kind === 'moved' ? 'ПЕРЕНЕСЛИ ПОКУПКУ' : 'ПЛАНИРУЕМ КУПИТЬ'}</b>`, '', title, `Когда: <b>${planText(wish)}</b>`];
@@ -805,7 +839,9 @@ function notify(a, kind, wish, actor) {
 /** Posts a new wish to the group and remembers that it did, so a failed post can be retried. */
 async function announce(a, wish) {
   const sent = await notify(a, 'added', wish);
-  if (sent && sent.ok) Object.assign(wish, { postedAt: new Date().toISOString(), postMessageId: sent.result && sent.result.message_id });
+  if (sent && sent.ok) {
+    Object.assign(wish, { postedAt: new Date().toISOString(), postMessageId: sent.result && sent.result.message_id, postKind: sent.via });
+  }
   else wish.postTries = (wish.postTries || 0) + 1;
   await saveWish(a, wish);
   return sent;

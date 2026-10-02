@@ -124,3 +124,12 @@ test('money and dates format consistently', () => {
   assert.equal(addMonths('2026-12-31', 1), '2027-01-01');
   assert.equal(formatDay('2026-10-12', TODAY), 'пн, 12 окт');
 });
+
+test('prices: a dot or comma before three digits is thousands, before one or two it is cents', async () => {
+  const { parseAmount, cleanWishInput } = await import('../public/lib/shared.js');
+  for (const [input, expected] of [['8.499', 8499], ['1,299', 1299], ['8 499', 8499], ['8,50', 8.5], ['8.5', 8.5], ['1.299,90', 1299.9], ['1,299.90', 1299.9], ['€ 15', 15]]) {
+    assert.equal(parseAmount(input), expected, input);
+  }
+  assert.equal(cleanWishInput({ title: 'x', price: '8.499' }, { isAdmin: false, isNew: true, today: '2026-10-02' }).price, 8499);
+  assert.throws(() => cleanWishInput({ title: 'x', price: 'abc' }, { isAdmin: false, isNew: true, today: '2026-10-02' }));
+});

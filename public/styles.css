@@ -1500,3 +1500,60 @@ select:focus {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Wide screens (Telegram on a computer) ----------
+   Telegram Desktop opens the app as a wide panel whose right part the sticker or other side panels
+   can cover, so on wide screens everything starts from the left instead of a centred phone column,
+   the tiles fill the width, and sheets open on the left too. */
+@media (min-width: 760px) {
+  #app {
+    max-width: 1180px;
+    margin: 0;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  .top {
+    margin: 0 -24px 18px;
+    padding: 20px 24px 24px;
+    border-radius: 0 0 28px 0;
+  }
+
+  .tiles {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
+
+  .fab {
+    right: auto;
+    left: 24px;
+  }
+
+  .overlay {
+    justify-content: flex-start;
+    align-items: center;
+    padding: 24px;
+  }
+
+  .sheet {
+    max-width: 560px;
+    max-height: calc(var(--tg-viewport-stable-height, 100vh) - 48px);
+    border-radius: 26px;
+  }
+
+  .sheet.tall {
+    height: calc(var(--tg-viewport-stable-height, 100vh) - 48px);
+  }
+
+  .toast,
+  .toast.show {
+    left: 24px;
+  }
+
+  .toast {
+    transform: translateY(10px);
+  }
+
+  .toast.show {
+    transform: none;
+  }
+}
