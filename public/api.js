@@ -72,7 +72,7 @@ function liveApi(url, initData, early) {
 
   return {
     demo: false,
-    list: () => call('list'),
+    list: () => call('list', window.WISHLIST_SCREEN ? { client: window.WISHLIST_SCREEN() } : {}),
     // One request id per action, reused by the retries, so a lost answer can't add a wish twice.
     create: (wish) => call('create', { wish, rid: requestId() }),
     update: (id, patch) => call('update', { id, patch }),

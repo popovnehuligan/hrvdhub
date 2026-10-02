@@ -296,6 +296,7 @@ async function handle(a, action, p, user) {
   const view = (wish) => publicWish(wish, user.id, (ref) => imageUrl(a, ref));
 
   if (action === 'list') {
+    if (p.client && typeof p.client === 'object') await noteClient(a, p.client);
     return { me: { user: userRef(user), isAdmin: user.isAdmin, currency: currency(a) }, items: (await readWishes(a)).map(view) };
   }
   if (action === 'preview') return preview(a, p.url);
@@ -367,6 +368,27 @@ function imageUrl(a, ref) {
   return drive ? `https://lh3.googleusercontent.com/d/${drive[1]}=w1000` : ref;
 }
 
+/** The last 12 screens the app was opened on (sizes and platform only), shown by GET /. */
+async function noteClient(a, client) {
+  try {
+    const clean = {};
+    for (const [k, v] of Object.entries(client).slice(0, 16)) {
+      if (['number', 'boolean'].includes(typeof v) || v === null) clean[k] = v;
+      else if (typeof v === 'string') clean[k] = v.slice(0, 160);
+    }
+    clean.at = new Date().toISOString();
+    let list = [];
+    try {
+      list = JSON.parse(prop(a, 'CLIENTS') || '[]');
+    } catch {
+      // start over
+    }
+    await setProp(a, 'CLIENTS', JSON.stringify([clean, ...list].slice(0, 12)));
+  } catch {
+    // never stands in the way of opening the app
+  }
+}
+
 async function health(a) {
   await loadProps(a);
   const wishes = await readWishes(a);
@@ -391,6 +413,13 @@ async function health(a) {
       accessGroups: accessGroups(a).length,
       denied,
     },
+    clients: (() => {
+      try {
+        return JSON.parse(prop(a, 'CLIENTS') || '[]');
+      } catch {
+        return [];
+      }
+    })(),
   };
 }
 

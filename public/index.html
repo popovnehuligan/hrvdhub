@@ -16,6 +16,20 @@
       // Google takes seconds to answer, so the list is asked for now rather than once app.js
       // and its modules have loaded; api.js takes the answer from window.WISHLIST_EARLY.
       // The modules are fetched side by side too (with the same ?v= as config.js).
+      // Screen sizes only (no names): how Telegram on each platform shows the app, for fixing layouts.
+      function screenInfo() {
+        var tg = window.Telegram && window.Telegram.WebApp;
+        var vv = window.visualViewport;
+        return {
+          w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
+          vw: vv ? Math.round(vv.width) : null, vh: vv ? Math.round(vv.height) : null,
+          sw: screen.width, sh: screen.height,
+          platform: tg && tg.platform, version: tg && tg.version, tgvh: tg && tg.viewportHeight,
+          expanded: tg && tg.isExpanded, fullscreen: tg && tg.isFullscreen,
+          ua: navigator.userAgent.slice(0, 160)
+        };
+      }
+      window.WISHLIST_SCREEN = screenInfo;
       (function () {
         try {
           var version = (/\?v=[\w.-]+/.exec(document.currentScript.previousElementSibling.src) || [''])[0];
@@ -32,7 +46,7 @@
           var list = fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'list', payload: {}, initData: initData }),
+            body: JSON.stringify({ action: 'list', payload: { client: screenInfo() }, initData: initData }),
           });
           list.catch(function () {}); // api.js reports failures and tries again
           window.WISHLIST_EARLY = { url: url, initData: initData, list: list };

@@ -229,3 +229,11 @@ test('worker: «8.499» is eight thousand, and editing the price corrects the ca
   assert.equal(w.sent.filter((c) => /^edit/.test(c.method)).length, 1, 'other changes leave the card alone');
   assert.ok(w.sent.length >= before);
 });
+
+test('worker: screen sizes sent with list are kept (12 at most) for check-ups', async () => {
+  const w = world();
+  for (let i = 0; i < 14; i++) await w.call('list', { client: { w: 1460 + i, dpr: 1.25, platform: 'tdesktop', junk: { a: 1 } } }, member);
+  const { clients } = (await (await w.get('/')).json()).data;
+  assert.equal(clients.length, 12);
+  assert.deepEqual([clients[0].w, clients[0].dpr, clients[0].platform, clients[0].junk], [1473, 1.25, 'tdesktop', undefined]);
+});
