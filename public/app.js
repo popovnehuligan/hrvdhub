@@ -1718,10 +1718,27 @@ function applyTheme() {
   if (supports('6.1')) tg.setBackgroundColor(dark ? '#2d2a28' : '#f6f2e9');
 }
 
+// Telegram Desktop (Windows, Linux) gets fullscreen wrong: it reports the whole screen as the app's
+// size but draws the app in its side panel, shifted right and cut off. There the app leaves
+// fullscreen (the bot's Main Mini App opens in fullscreen, which suits phones).
+const DESKTOP_FULLSCREEN_BROKEN = ['tdesktop', 'unigram'];
+
+function leaveBrokenFullscreen() {
+  if (tg?.isFullscreen && DESKTOP_FULLSCREEN_BROKEN.includes(tg.platform) && typeof tg.exitFullscreen === 'function') {
+    try {
+      tg.exitFullscreen();
+    } catch {
+      // older Telegram: nothing to do
+    }
+  }
+}
+
 async function boot() {
   if (tg) {
     tg.ready();
     tg.expand();
+    leaveBrokenFullscreen();
+    tg.onEvent?.('fullscreenChanged', leaveBrokenFullscreen);
     if (supports('7.7')) tg.disableVerticalSwipes();
     applyTheme();
     tg.onEvent('themeChanged', applyTheme);
