@@ -158,13 +158,13 @@ test('worker: hearts are per person and never lost; plans and purchases reply to
   assert.equal(planned.ok, true, planned.error);
   assert.equal(planned.data.posted, true);
   const reply = w.of('sendMessage').at(-1).params;
-  assert.match(reply.text, /^📅 <b>ПЛАНИРУЕМ КУПИТЬ<\/b>[\s\S]*Ноябрь 2026[\s\S]*Запланировал\(а\): Миша$/);
+  assert.equal(reply.text, '📅 <b>В план:</b> Малый барабан\nНоябрь 2026 · Миша', 'two short lines');
   assert.equal(reply.reply_parameters.message_id, cardId);
-  assert.equal(reply.reply_markup.inline_keyboard[0][0].url, 'https://t.me/hrvd_wishlist_bot?startapp=plan');
+  assert.equal(reply.reply_markup, undefined, 'no big button');
   assert.equal((await w.call('update', { id: item.id, patch: { note: 'Ludwig' } }, admin)).data.posted, null);
   const bought = await w.call('update', { id: item.id, patch: { status: 'bought', boughtPrice: '149,9', boughtAt: '2026-11-20' } }, admin);
   assert.equal(bought.data.item.boughtPrice, 149.9);
-  assert.match(w.of('sendMessage').at(-1).params.text, /^✅ <b>КУПЛЕНО<\/b>[\s\S]*Оплачено: 149,90/);
+  assert.match(w.of('sendMessage').at(-1).params.text, /^✅ <b>Куплено:<\/b> Малый барабан\n149,90\s€ · Миша$/);
   assert.equal((await w.call('list', {}, other)).data.items[0].voted, true, 'votes survive other edits');
 });
 
@@ -236,4 +236,15 @@ test('worker: screen sizes sent with list are kept (12 at most) for check-ups', 
   const { clients } = (await (await w.get('/')).json()).data;
   assert.equal(clients.length, 12);
   assert.deepEqual([clients[0].w, clients[0].dpr, clients[0].platform, clients[0].junk], [1473, 1.25, 'tdesktop', undefined]);
+});
+
+test('worker: a plan for a wish without a card in the group is still short text, never a picture', async () => {
+  const w = world();
+  const up = await w.call('upload', { photo: dataUrl(jpeg(5000)) }, member);
+  const { item } = (await w.call('create', { wish: { title: 'Агрегат для значков', image: up.data.image, price: '50' } }, member)).data;
+  w.env.DB.raw.prepare("UPDATE wishes SET data = json_remove(data, '$.postMessageId')").run(); // as for wishes from before
+  const photos = w.of('sendPhoto').length;
+  await w.call('update', { id: item.id, patch: { planned: true, plannedDate: null, plannedPrecision: null } }, admin);
+  assert.equal(w.of('sendPhoto').length, photos);
+  assert.equal(w.of('sendMessage').at(-1).params.text, '📅 <b>В план:</b> Агрегат для значков\nдата пока не выбрана · 50\u00a0€ · Миша'.replace('\u00a0', w.of('sendMessage').at(-1).params.text.match(/50(.)€/)[1]));
 });

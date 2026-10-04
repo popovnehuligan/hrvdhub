@@ -775,13 +775,13 @@ async function post(a, wish, text, options = {}) {
   const chat = notifyChat(a);
   if (!chat) return { ok: false, description: 'группа не задана (GROUP_CHAT_ID)' };
   const params = { ...target(a, chat), parse_mode: 'HTML' };
-  const button = openButton(a, options.start === 'plan' ? 'plan' : `item_${wish.id}`, options.button || 'Открыть в вишлисте');
+  const button = options.compact ? null : openButton(a, `item_${wish.id}`, options.button || 'Открыть в вишлисте');
   if (button) params.reply_markup = button;
   if (options.reply && wish.postMessageId) {
     params.reply_parameters = { message_id: Number(wish.postMessageId), allow_sending_without_reply: true };
   }
   let result = null;
-  if (!params.reply_parameters && wish.image) {
+  if (!options.compact && !params.reply_parameters && wish.image) {
     // A reply points at the card with the picture already; the picture again would only repeat it.
     let photo = await photoBlob(a, wish.image);
     if (!photo && /^(drive:|https:\/\/)/.test(wish.image)) photo = imageUrl(a, wish.image);
@@ -851,16 +851,15 @@ function notify(a, kind, wish, actor) {
     lines = [cardText(wish)];
     options.button = 'Открыть и проголосовать';
   } else if (kind === 'planned' || kind === 'moved') {
-    lines = [`📅 <b>${kind === 'moved' ? 'ПЕРЕНЕСЛИ ПОКУПКУ' : 'ПЛАНИРУЕМ КУПИТЬ'}</b>`, '', title, `Когда: <b>${planText(wish)}</b>`];
-    if (priceText(wish)) lines.push(`Цена: ${priceText(wish)}`);
-    if (who) lines.push('', `${kind === 'moved' ? 'Перенёс(ла)' : 'Запланировал(а)'}: ${who}`);
-    options = { reply: true, start: 'plan', button: 'Открыть план покупок' };
+    // Short: two lines, no picture and no button — the card above has both.
+    const plan = describePlan(wish, today());
+    const when = !plan || plan.tone === 'nodate' ? 'дата пока не выбрана' : plan.detail;
+    lines = [`📅 <b>${kind === 'moved' ? 'Перенесли' : 'В план'}:</b> ${escapeHtml(wish.title)}`, [when, priceText(wish), who].filter(Boolean).join(' · ')];
+    options = { reply: true, compact: true };
   } else {
     const paid = wish.boughtPrice != null ? wish.boughtPrice : itemTotal(wish);
-    lines = ['✅ <b>КУПЛЕНО</b>', '', title];
-    if (paid != null) lines.push(`Оплачено: ${formatMoney(paid, wish.currency)}`);
-    if (who) lines.push('', `Отметил(а): ${who}`);
-    options = { reply: true };
+    lines = [`✅ <b>Куплено:</b> ${escapeHtml(wish.title)}`, [paid != null ? formatMoney(paid, wish.currency) : '', who].filter(Boolean).join(' · ')];
+    options = { reply: true, compact: true };
   }
   return post(a, wish, lines.join('\n'), options);
 }
